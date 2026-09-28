@@ -1,0 +1,58 @@
+# SIH26012 Study Area Definition
+aoi_id: "SIH26012_INDIA_CANDIDATE_01_LALPUR"
+country: "India"
+state: "Gujarat"
+district: "Ahmedabad / Kheda District Border"
+locality: "Lalpur Village (Abadi area)"
+lgd_village_code: "511638"
+
+selection_rationale: >
+  Single high-resolution drone orthomosaic candidate identified from Project Vaayu public
+  sample data. Evaluated as an inspection candidate for SIH26012 cadastral review prototype.
+  Verified to contain 317 building footprint annotations and 19 road polygon annotations
+  within its exact geographic bounds.
+
+spatial_reference:
+  native_crs: "EPSG:3857 (WGS 84 / Pseudo-Mercator)"
+  geographic_crs: "EPSG:4326 (WGS 84)"
+  vertical_datum: "EGM96 / WGS84 Ellipsoid"
+
+bounds_epsg_3857:
+  xmin: 8098996.38
+  ymin: 2636558.41
+  xmax: 8099677.16
+  ymax: 2637264.51
+  width_meters: 680.78
+  height_meters: 706.10
+
+bounds_epsg_4326:
+  lon_min: 72.754522
+  lat_min: 23.037534
+  lon_max: 72.760638
+  lat_max: 23.043371
+  centroid_lon: 72.757580
+  centroid_lat: 23.040453
+
+raster_characteristics:
+  filename: "ortho_lalpur(511638)_3857.ecw"
+  raster_format: "ECW v2"
+  width_pixels: 20137
+  height_pixels: 20886
+  bands: 3 (Red, Green, Blue)
+  nominal_gsd_cm: 3.38
+  compression_ratio: "20:1"
+  imagery_acquisition_date: "Circa 2022-2023 (SVAMITVA survey program flight)"
+  acquisition_platform: "UAV / Survey Drone"
+
+reference_layer_status:
+  building_footprints: "AVAILABLE (317 features, sanitized, inspection-only terms)"
+  village_road_polygons: "AVAILABLE (19 features, sanitized, inspection-only terms)"
+  osm_road_centerlines: "AVAILABLE (7 features including SH144, ODbL 1.0 license)"
+  cadastral_parcels: "NOT AVAILABLE (No public self-service vector parcel source exists)"
+
+go_no_go_disposition: "CONDITIONAL"
+disposition_summary: >
+  Technical alignment, CRS, and spatial overlap between raster and footprint layers pass 100%.
+  However, the candidate raster and shapefile carry UNKNOWN / UNRESOLVED reuse permissions
+  and no cadastral parcel vector exists. Recommending a fixed-area review demo fallback
+  using building conflict review rather than fabricated parcel truth.

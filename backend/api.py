@@ -1,0 +1,254 @@
+"""
+FastAPI Application and REST API for SIH26012 Feature Review Platform.
+Provides endpoints for layers, inspection, human edits, topology warnings,
+transparent scoring, model inference stub, benchmark status, and GeoJSON export/import.
+"""
+import os
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException, status, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, FileResponse
+
+from backend.services.feature_store import store
+from backend.services.data_loader import PROVENANCE_DISCLAIMER
+from backend.services.model_adapter import MockBuildingModel, BenchmarkDatasetAdapter, ModelInferenceError
+from backend.models.schemas import (
+    GeometryEditRequest,
+    FeatureStatusUpdateRequest,
+    DraftFeatureCreateRequest,
+    ModelPredictRequest
+)
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    store.initialize()
+    yield
+
+app = FastAPI(
+    title="SIH26012 Feature Review Platform API",
+    description="Geospatial feature-review and topology inspection platform for Lalpur study area.",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+# CORS middleware for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+@app.get("/api/health")
+def get_health():
+    """Health check and active layer status."""
+    store.initialize()
+    return {
+        "status": "online",
+        "study_area": "Lalpur Village, Gujarat (LGD 511638)",
+        "layers_loaded": {k: len(v) for k, v in store.layers.items()},
+        "total_warnings": len(store.warnings)
+    }
+
+@app.get("/api/metadata")
+def get_metadata():
+    """System metadata, study area bounds, CRS, and provenance notices."""
+    return {
+        "aoi_id": "SIH26012_INDIA_CANDIDATE_01_LALPUR",
+        "locality": "Lalpur Village, Gujarat, India (LGD Code: 511638)",
+        "bounds_epsg_4326": {
+            "lon_min": 72.754522,
+            "lat_min": 23.037534,
+            "lon_max": 72.760638,
+            "lat_max": 23.043371,
+            "centroid": [72.757580, 23.040453]
+        },
+        "coordinate_systems": {
+            "web_map_input": "EPSG:4326 (WGS 84 / RFC 7946)",
+            "native_raster_crs": "EPSG:3857 (Web Mercator)"
+        },
+        "raster_orthomosaic_status": {
+            "filename": "ortho_lalpur(511638)_3857.ecw",
+            "format": "ECW v2 (20,137 x 20,886 px, 3.38 cm GSD)",
+            "browser_service_status": "UNAVAILABLE_DIRECT_ECW",
+            "reason": (
+                "Proprietary ECW format requires ERDAS SDK which is absent in standard open-source GDAL/browsers. "
+                "OpenStreetMap basemap or neutral vector canvas is displayed with full attribution."
+            )
+        },
+        "provenance_disclaimer": PROVENANCE_DISCLAIMER,
+        "cadastral_notice": (
+            "This application is a feature-review prototype and is NOT an official cadastral system. "
+            "Building footprints are unverified physical envelopes, not cadastral parcels. "
+            "No official parcel ground truth exists for this AOI (parcel template has 0 features)."
+        ),
+        "osm_attribution": "© OpenStreetMap contributors (ODbL 1.0)"
+    }
+
+@app.get("/api/layers/{layer_name}")
+def get_layer(layer_name: str):
+    """Returns GeoJSON FeatureCollection for specified layer."""
+    try:
+        return store.get_layer_collection(layer_name)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Layer '{layer_name}' not found. Available layers: {list(store.layers.keys())}"
+        )
+
+@app.get("/api/warnings")
+def get_warnings():
+    """Returns list of all active topology warnings."""
+    store.initialize()
+    return {
+        "total_warnings": len(store.warnings),
+        "synthetic_warning_count": sum(1 for w in store.warnings if "synthetic" in w.source),
+        "real_warning_count": sum(1 for w in store.warnings if "synthetic" not in w.source),
+        "warnings": store.warnings
+    }
+
+@app.get("/api/scores")
+def get_scores():
+    """Returns review-priority scores for all loaded features."""
+    store.initialize()
+    return {
+        "total_scored_features": len(store.scores),
+        "heuristic_disclaimer": "prototype heuristic—not a validated survey-priority model",
+        "scores": store.scores
+    }
+
+@app.get("/api/features/{feature_id}")
+def get_feature_details(feature_id: str):
+    """Retrieves full details, audit trail, warnings, and score breakdown for a single feature."""
+    found = store.find_feature(feature_id)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Feature with ID '{feature_id}' not found.")
+
+    layer_name, feat = found
+    score_bd = store.scores.get(feature_id)
+    w_ids = feat.get("properties", {}).get("warning_ids", [])
+    relevant_warnings = [w for w in store.warnings if w.warning_id in w_ids]
+
+    has_geometry_edits = False
+    if feat.get("original_geometry") and feat.get("original_geometry") != feat.get("geometry"):
+        has_geometry_edits = True
+
+    return {
+        "feature": feat,
+        "layer": layer_name,
+        "score_breakdown": score_bd,
+        "associated_warnings": relevant_warnings,
+        "has_geometry_edits": has_geometry_edits
+    }
+
+@app.put("/api/features/{feature_id}")
+def update_feature(feature_id: str, req: FeatureStatusUpdateRequest):
+    """Updates review status (under_review, approved, rejected) and inspector notes."""
+    try:
+        updated = store.update_feature_status(
+            feature_id=feature_id,
+            review_status=req.review_status,
+            notes=req.notes,
+            reviewer_label=req.reviewer_label
+        )
+        return {
+            "status": "success",
+            "feature": updated,
+            "score": store.scores.get(feature_id)
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/features/{feature_id}/edit-geometry")
+def edit_geometry(feature_id: str, req: GeometryEditRequest):
+    """Saves human geometry edits while preserving original_geometry audit snapshot."""
+    try:
+        updated = store.update_feature_geometry(
+            feature_id=feature_id,
+            new_geometry=req.geometry.model_dump(),
+            reviewer_label=req.reviewer_label,
+            edit_reason=req.edit_reason
+        )
+        return {
+            "status": "success",
+            "message": "Geometry updated; original geometry preserved in audit snapshot.",
+            "feature": updated
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/features/{feature_id}/revert")
+def revert_geometry(feature_id: str):
+    """Reverts a feature's geometry back to its original unedited geometry."""
+    try:
+        reverted = store.revert_feature_geometry(feature_id)
+        return {
+            "status": "success",
+            "message": "Geometry reverted to original baseline.",
+            "feature": reverted
+        }
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/features/draft")
+def create_draft(req: DraftFeatureCreateRequest):
+    """Adds a newly drawn draft feature (tagged manual_visual_reference)."""
+    draft = store.add_draft_feature(
+        geometry=req.geometry.model_dump(),
+        feature_type=req.feature_type,
+        notes=req.notes,
+        reviewer_label=req.reviewer_label
+    )
+    return {"status": "success", "feature": draft}
+
+@app.post("/api/models/predict")
+def predict_building_model(req: ModelPredictRequest):
+    """Triggers building model inference mock provider."""
+    model = MockBuildingModel(model_name=req.model_name, model_version=req.model_version)
+    try:
+        result = model.predict(
+            confidence_threshold=req.confidence_threshold,
+            simulate_failure=req.simulate_failure
+        )
+        # Add generated features to active store
+        added_features = store.add_ai_predicted_features(result["features"])
+        return {
+            "status": "success",
+            "detected_count": len(added_features),
+            "features": added_features,
+            "metadata": result.get("model_metadata")
+        }
+    except ModelInferenceError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@app.get("/api/models/benchmarks")
+def get_benchmarks():
+    """Returns official benchmark datasets manifest and evaluation status."""
+    return BenchmarkDatasetAdapter.get_dataset_manifest()
+
+@app.get("/api/export")
+def export_bundle():
+    """Exports all reviewed features into a single RFC 7946 GeoJSON bundle."""
+    bundle = store.export_reviewed_bundle()
+    return JSONResponse(
+        content=bundle,
+        headers={"Content-Disposition": "attachment; filename=SIH26012_Lalpur_Reviewed_Features.geojson"}
+    )
+
+@app.post("/api/import")
+def import_bundle(bundle: Dict[str, Any] = Body(...)):
+    """Imports and validates an exported GeoJSON bundle."""
+    try:
+        res = store.import_reviewed_bundle(bundle)
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Mount static frontend files if folder exists
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "name": "blank_parcel_layer_template_3857",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
+    }
+  },
+  "comment": "Empty template for official reference parcels. No verified Indian parcel vector exists for this AOI. DO NOT fabricate synthetic parcel boundaries.",
+  "schema_specification": {
+    "parcel_id": "string (e.g. P-001)",
+    "geometry": "Polygon or MultiPolygon",
+    "source": "official_reference | manual_visual_reference",
+    "source_date": "YYYY-MM-DD",
+    "verification_status": "unverified | survey_verified",
+    "confidence": "null | float"
+  },
+  "features": []
+}

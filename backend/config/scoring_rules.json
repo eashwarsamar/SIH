@@ -1,0 +1,73 @@
+{
+  "system_title": "SIH26012 Prototype Feature Review Priority Scoring",
+  "disclaimer": "prototype heuristic—not a validated survey-priority model",
+  "base_score": 10,
+  "score_range": {
+    "min": 0,
+    "max": 100
+  },
+  "priority_bands": [
+    {
+      "priority": "high",
+      "min_score": 70,
+      "max_score": 100,
+      "description": "Requires primary reviewer attention due to spatial overlaps, unverified source status, or geometric anomalies."
+    },
+    {
+      "priority": "medium",
+      "min_score": 40,
+      "max_score": 69,
+      "description": "Secondary inspection recommended."
+    },
+    {
+      "priority": "low",
+      "min_score": 0,
+      "max_score": 39,
+      "description": "Standard feature with no detected conflicts or approved by reviewer."
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": "R_UNVERIFIED_SOURCE",
+      "rule_name": "Unverified Data Source",
+      "points": 25,
+      "description": "Feature originates from unverified Project Vaayu sample rather than ground-verified survey."
+    },
+    {
+      "rule_id": "R_SPATIAL_OVERLAP_WARNING",
+      "rule_name": "Spatial Overlap Warning",
+      "points": 35,
+      "description": "Feature intersects an adjacent village road corridor or overlapping polygon boundary."
+    },
+    {
+      "rule_id": "R_INVALID_GEOMETRY",
+      "rule_name": "Geometry Anomaly / Invalid Ring",
+      "points": 40,
+      "description": "Feature geometry has self-intersections, bowties, or violates OGC validity."
+    },
+    {
+      "rule_id": "R_EXTREME_DIMENSIONS",
+      "rule_name": "Unusual Footprint Dimensions",
+      "points": 15,
+      "description": "Building footprint area is unusually tiny (< 10 m²) or excessively large (> 600 m²)."
+    },
+    {
+      "rule_id": "R_LOW_AI_CONFIDENCE",
+      "rule_name": "Low Model Confidence",
+      "points": 20,
+      "description": "AI model inference confidence is below 0.70 threshold."
+    },
+    {
+      "rule_id": "R_HUMAN_APPROVED",
+      "rule_name": "Human Reviewer Approved",
+      "points": -50,
+      "description": "A human reviewer has explicitly inspected and marked this feature approved."
+    },
+    {
+      "rule_id": "R_HUMAN_REJECTED",
+      "rule_name": "Human Reviewer Rejected",
+      "points": -30,
+      "description": "Feature marked rejected by human reviewer (dispositioned)."
+    }
+  ]
+}

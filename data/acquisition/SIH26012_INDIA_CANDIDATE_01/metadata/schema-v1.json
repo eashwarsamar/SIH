@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SIH26012 Shared Feature Schema v1",
+  "description": "Standardized GeoJSON Feature schema for SIH26012 AI-Assisted Cadastral Review Platform",
+  "definitions": {
+    "ReferenceParcel": {
+      "type": "object",
+      "required": [
+        "parcel_id",
+        "geometry",
+        "source",
+        "verification_status"
+      ],
+      "properties": {
+        "parcel_id": {
+          "type": "string",
+          "example": "P-014"
+        },
+        "geometry": {
+          "type": "object",
+          "description": "GeoJSON Polygon or MultiPolygon"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "official_reference",
+            "manual_visual_reference"
+          ]
+        },
+        "source_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date",
+          "example": "2025-04-12"
+        },
+        "verification_status": {
+          "type": "string",
+          "enum": [
+            "unverified",
+            "survey_verified"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      }
+    },
+    "BuildingFeature": {
+      "type": "object",
+      "required": [
+        "building_id",
+        "geometry",
+        "feature_type",
+        "source",
+        "review_status"
+      ],
+      "properties": {
+        "building_id": {
+          "type": "string",
+          "example": "B-103"
+        },
+        "geometry": {
+          "type": "object",
+          "description": "GeoJSON Polygon"
+        },
+        "feature_type": {
+          "type": "string",
+          "const": "building"
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "ai_building_model",
+            "manual_visual_reference"
+          ]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": [
+            "unverified",
+            "reviewed_approved",
+            "reviewed_rejected",
+            "flagged_for_field_survey"
+          ]
+        },
+        "roof_type": {
+          "type": "string",
+          "enum": [
+            "RCC",
+            "Tiled",
+            "Tin",
+            "Others",
+            "Unknown"
+          ]
+        },
+        "area_sqm": {
+          "type": "number",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RoadFeature": {
+      "type": "object",
+      "required": [
+        "road_id",
+        "geometry",
+        "feature_type",
+        "source",
+        "review_status"
+      ],
+      "properties": {
+        "road_id": {
+          "type": "string",
+          "example": "R-021"
+        },
+        "geometry": {
+          "type": "object",
+          "description": "GeoJSON LineString or Polygon"
+        },
+        "feature_type": {
+          "type": "string",
+          "enum": [
+            "road",
+            "pathway",
+            "village_road_polygon"
+          ]
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "ai_road_model",
+            "osm",
+            "manual_visual_reference"
+          ]
+        },
+        "review_status": {
+          "type": "string",
+          "enum": [
+            "unverified",
+            "reviewed_approved",
+            "reviewed_rejected"
+          ]
+        }
+      }
+    },
+    "TopologyWarning": {
+      "type": "object",
+      "required": [
+        "warning_id",
+        "warning_type",
+        "severity",
+        "feature_ids",
+        "explanation",
+        "status"
+      ],
+      "properties": {
+        "warning_id": {
+          "type": "string",
+          "example": "W-011"
+        },
+        "warning_type": {
+          "type": "string",
+          "enum": [
+            "building_crosses_parcel",
+            "parcel_overlap",
+            "road_intersects_parcel",
+            "unmapped_building_outside_parcel",
+            "geometry_invalid"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "feature_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "resolved",
+            "ignored"
+          ]
+        }
+      }
+    },
+    "ReviewPriorityScore": {
+      "type": "object",
+      "required": [
+        "parcel_id",
+        "review_score",
+        "priority",
+        "reasons"
+      ],
+      "properties": {
+        "parcel_id": {
+          "type": "string"
+        },
+        "review_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

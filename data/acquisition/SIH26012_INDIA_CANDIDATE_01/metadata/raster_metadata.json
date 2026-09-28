@@ -1,0 +1,49 @@
+{
+  "file_name": "ortho_lalpur(511638)_3857.ecw",
+  "format": "ECW (Enhanced Compression Wavelet v2)",
+  "file_size_bytes": 22984504,
+  "sha256": "1e6cc91b5bfa12b3f5c167a8713c5a89f6b4a045c71dd6230eaaeb704efa48d6",
+  "embedded_crs": "EPSG:3857 (WGS 84 / Pseudo-Mercator)",
+  "embedded_datum": "WGS 84",
+  "embedded_projection": "EPSG:3857",
+  "pixel_dimensions": {
+    "width_pixels": 20137,
+    "height_pixels": 20886,
+    "total_pixels": 420581382
+  },
+  "band_count": 3,
+  "color_interpretation": [
+    "Red",
+    "Green",
+    "Blue"
+  ],
+  "ground_sample_distance_meters": {
+    "gsd_x": 0.033807,
+    "gsd_y": 0.033807,
+    "gsd_nominal_cm": 3.38
+  },
+  "bounds_epsg_3857": {
+    "xmin": 8098996.378,
+    "ymin": 2636558.407,
+    "xmax": 8099677.155,
+    "ymax": 2637264.506,
+    "width_meters": 680.78,
+    "height_meters": 706.1
+  },
+  "bounds_epsg_4326": {
+    "lon_min": 72.754522,
+    "lat_min": 23.037534,
+    "lon_max": 72.760638,
+    "lat_max": 23.043371
+  },
+  "driver_status": {
+    "standard_gdal_open_source": "Unsupported (proprietary Hexagon SDK required)",
+    "rasterio_open_result": "RasterioIOError: not recognized as supported format",
+    "header_inspection_method": "Direct binary parser adhering to NCS ECW v2 header specification"
+  },
+  "reuse_terms": {
+    "license": "Unknown / permission not established",
+    "provenance": "Government hackathon sample (SVAMITVA / Gram Manchitra)",
+    "status": "Local inspection only; not authorized for public distribution or training"
+  }
+}

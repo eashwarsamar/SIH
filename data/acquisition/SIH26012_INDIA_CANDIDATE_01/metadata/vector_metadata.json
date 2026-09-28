@@ -1,0 +1,82 @@
+{
+  "study_area_id": "SIH26012_INDIA_CANDIDATE_01_LALPUR",
+  "layers": {
+    "sanitized_lalpur_buildings": {
+      "source_file": "Gujarat_Build_Up_Area_Type.shp",
+      "feature_type": "Building Footprints (Polygons)",
+      "is_cadastral_parcel": false,
+      "total_source_features": 550,
+      "retained_lalpur_features": 317,
+      "excluded_suragpur_features": 233,
+      "exclusion_reason": "Suragpur features (LGD 515578) are located >200 km southwest (Amreli district) and have zero spatial intersection with the Lalpur raster.",
+      "spatial_overlap_with_raster": "317 / 317 (100.0%)",
+      "coordinate_systems": [
+        "EPSG:3857",
+        "EPSG:4326"
+      ],
+      "geometry_status": "Valid (self-intersections healed)",
+      "sanitized_fields": [
+        "name",
+        "owner_name",
+        "property_i",
+        "property_c",
+        "globalid",
+        "uniq_id"
+      ],
+      "retained_fields": [
+        "building_id",
+        "feature_type",
+        "area_sqm",
+        "roof_type",
+        "no_floors",
+        "lgd_village_code",
+        "locality",
+        "source",
+        "verification_status"
+      ],
+      "sha256_3857_geojson": ""
+    },
+    "sanitized_lalpur_road_polygons": {
+      "source_file": "Gujarat_Road.shp",
+      "feature_type": "Village Road Polygons",
+      "total_source_features": 49,
+      "retained_lalpur_features": 19,
+      "excluded_suragpur_features": 30,
+      "spatial_overlap_with_raster": "19 / 19 (100.0%)",
+      "coordinate_systems": [
+        "EPSG:3857",
+        "EPSG:4326"
+      ],
+      "retained_fields": [
+        "road_id",
+        "feature_type",
+        "road_type",
+        "width",
+        "pavement",
+        "status",
+        "lgd_village_code",
+        "locality",
+        "source",
+        "verification_status"
+      ]
+    },
+    "osm_roads_lalpur": {
+      "source": "OpenStreetMap via Overpass API",
+      "feature_type": "Road Centerlines (LineStrings)",
+      "extraction_date": "2026-09-28",
+      "features_in_aoi": 5,
+      "primary_highway": "State Highway 144 (SH144)",
+      "license": "Open Data Commons Open Database License (ODbL 1.0)",
+      "attribution": "\u00a9 OpenStreetMap contributors",
+      "coordinate_systems": [
+        "EPSG:3857",
+        "EPSG:4326"
+      ]
+    },
+    "cadastral_parcels": {
+      "status": "UNAVAILABLE / NOT FOUND",
+      "reason": "No permission-cleared or self-service parcel polygon download exists for Lalpur, Gujarat. Gujarat Revenue Department provides administrative PDFs only. Bhuvan Cadastral layer is a viewer-only service with disclaimers. Svamitva state download link returned 404.",
+      "action_taken": "Provided blank_parcel_template.geojson conforming to Blueprint schema. No synthetic parcel boundaries fabricated."
+    }
+  }
+}

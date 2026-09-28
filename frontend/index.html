@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="SIH26012 Geospatial Feature-Review and Cadastral Demonstration Platform for Lalpur Village AOI.">
+  <title>SIH26012 — Geospatial Feature Review Platform</title>
+
+  <!-- Leaflet CSS (Local Vendor with CDN fallback) -->
+  <link rel="stylesheet" href="vendor/leaflet.css" onerror="this.onerror=null;this.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';" />
+  <!-- App Stylesheet -->
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+  <!-- Top App Navigation -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="brand-logo">SIH</div>
+      <div class="brand-info">
+        <h1>
+          <span>SIH26012 Feature Review</span>
+          <span class="locality-tag">Lalpur Village • LGD 511638</span>
+        </h1>
+      </div>
+    </div>
+
+    <div class="header-status-group">
+      <div class="provenance-pill" id="pill-provenance-info" title="Click to view provenance notice and cadastral disclaimer">
+        <span>⚠️ Project Vaayu Sample (Unverified)</span>
+        <span style="font-size: 10px; opacity: 0.8;">[Notice]</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-secondary" id="btn-open-model-modal">⚡ AI Building Model</button>
+      <button class="btn btn-secondary" id="btn-open-benchmark-modal">📊 Benchmark Datasets</button>
+      <input type="file" id="import-file-input" accept=".geojson,.json" style="display: none;" />
+      <button class="btn btn-secondary" id="btn-import-geojson">📂 Import GeoJSON</button>
+      <button class="btn btn-primary" id="btn-export-geojson">💾 Export Reviewed GeoJSON</button>
+    </div>
+  </header>
+
+  <!-- 3-Panel Workspace -->
+  <main class="app-workspace">
+    <!-- Left Sidebar: Layer Switcher & Basemap -->
+    <aside class="left-sidebar">
+      <div class="sidebar-header">
+        <span>Layer Management</span>
+        <span style="font-size: 10px; color: var(--accent-cyan);">WGS 84 (4326)</span>
+      </div>
+
+      <div class="sidebar-scrollable">
+        <!-- Reference Layers -->
+        <div>
+          <div class="section-title">
+            <span>Reference Layers</span>
+            <span style="font-size: 10px; color: var(--text-faint);">Lalpur AOI</span>
+          </div>
+
+          <!-- Buildings Layer -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #38bdf8;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">Building Footprints</span>
+                <span class="layer-meta"><span id="badge-count-buildings">317</span> features • unverified</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-buildings" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Road Corridors Layer -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #f59e0b;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">Village Road Corridors</span>
+                <span class="layer-meta"><span id="badge-count-roads">19</span> polygons</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-roads" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- OSM Road Centerlines -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #06b6d4;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">OSM Road Centerlines</span>
+                <span class="layer-meta"><span id="badge-count-osm">5</span> lines • SH144</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-osm" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Real Cadastral Parcels (Blank Template) -->
+          <div class="layer-card" style="opacity: 0.85;">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #64748b;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">Cadastral Parcels</span>
+                <span class="layer-meta"><span class="badge-zero">0 FEATURES (BLANK)</span></span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-parcels">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Demonstration & Inspection Layers -->
+        <div>
+          <div class="section-title">
+            <span>Review & Demo Layers</span>
+            <span style="font-size: 10px; color: var(--accent-purple);">Testing</span>
+          </div>
+
+          <!-- Synthetic Test Layer -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #c084fc;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">Synthetic Test Data</span>
+                <span class="layer-meta"><span class="badge-synth">DEMO ONLY</span> • <span id="badge-count-synthetic">8</span> feats</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-synthetic" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- User Drafts -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #10b981;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">User Review Drafts</span>
+                <span class="layer-meta">Traced polygons</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-drafts" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- AI Model Predictions -->
+          <div class="layer-card">
+            <div class="layer-info">
+              <div class="layer-color-dot" style="background: #818cf8;"></div>
+              <div class="layer-name-wrap">
+                <span class="layer-name">AI Predicted Footprints</span>
+                <span class="layer-meta">Unet++ detections</span>
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="toggle-ai" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Basemap Selection -->
+        <div>
+          <div class="section-title">Basemap</div>
+          <div class="basemap-group">
+            <button class="basemap-btn active" id="btn-basemap-osm">OpenStreetMap</button>
+            <button class="basemap-btn" id="btn-basemap-neutral">Neutral Dark</button>
+          </div>
+        </div>
+
+        <!-- Orthomosaic Status Card -->
+        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px; font-size: 11px; color: var(--text-muted);">
+          <div id="raster-status-text">
+            <strong>Drone Raster (ECW):</strong> 20,137 x 20,886 px, 3.38 cm GSD<br>
+            <span style="font-size: 10.5px; color: var(--text-faint);">
+              ECW requires proprietary ERDAS SDK. OpenStreetMap basemap is displayed with full attribution.
+            </span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Map Section -->
+    <section class="map-container">
+      <div id="map"></div>
+
+      <!-- Floating Map Draw Toolbar -->
+      <div class="map-floating-bar">
+        <button class="map-control-btn" id="btn-tool-draw-polygon" title="Digitize a new review draft polygon">
+          ✏️ Draw Draft Polygon
+        </button>
+        <button class="map-control-btn btn-success" id="btn-tool-finish-draw" style="display: none;">
+          ✓ Finish Polygon
+        </button>
+        <button class="map-control-btn btn-danger" id="btn-tool-cancel-draw" style="display: none;">
+          ✕ Cancel
+        </button>
+      </div>
+
+      <!-- Bottom Topology Warning Drawer -->
+      <section class="bottom-warning-tray" id="bottom-warning-tray-container"></section>
+
+      <!-- Persistent OSM Attribution Bar -->
+      <div class="osm-attribution-bar">
+        <div>
+          <span>Lalpur AOI: EPSG:4326 RFC 7946 GeoJSON</span> • 
+          <span>Imagery GSD: 3.38 cm (Offline ECW)</span>
+        </div>
+        <div>
+          Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a> (ODbL 1.0)
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Sidebar: Feature Inspector -->
+    <aside class="right-sidebar">
+      <div class="sidebar-header">
+        <span>Feature Inspector</span>
+        <span style="font-size: 10px; color: var(--text-faint);">Reviewer: demo-reviewer</span>
+      </div>
+
+      <div id="feature-inspector-container" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+        <!-- Dynamically rendered by inspector.js -->
+      </div>
+    </aside>
+  </main>
+
+  <!-- ==============================================================================
+       Modals
+       ============================================================================== -->
+
+  <!-- 1. Provenance Notice Modal -->
+  <div class="modal-overlay" id="modal-provenance">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2>Data Provenance & Cadastral Notice</h2>
+        <button class="modal-close-btn modal-close-trigger">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 8px; padding: 12px; color: #fbbf24;">
+          <strong>Important Provenance Declaration:</strong><br>
+          “Project Vaayu sample; repository README describes underlying data as Ministry-supplied SVAMITVA/hackathon material. Provenance is reported, not independently verified. Not official parcel ground truth.”
+        </div>
+        <p>
+          <strong>Not an Official Cadastre:</strong> This prototype is built for geospatial review and topology conflict inspection. The 317 building footprint annotations represent physical rooftop boundaries and are <strong>NOT</strong> cadastral parcels.
+        </p>
+        <p>
+          <strong>Zero Cadastral Parcels:</strong> Official self-service cadastral parcel GIS vectors do not exist for Lalpur Village (LGD 511638). The parcel layer template is intentionally empty (0 features) and no fictional parcel boundaries have been fabricated.
+        </p>
+        <p>
+          <strong>Privacy Sanitization:</strong> All personal identities, owner names, property IDs, and property card numbers have been completely stripped from the working assets.
+        </p>
+        <p>
+          <strong>OpenStreetMap Attribution:</strong> Centerline vectors and basemap tiles are distributed under the Open Data Commons Open Database License (ODbL 1.0) by © OpenStreetMap contributors.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary modal-close-trigger">Understood & Acknowledged</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. AI Building Model Modal -->
+  <div class="modal-overlay" id="modal-ai-model">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2>AI Building Model Inference Provider</h2>
+        <button class="modal-close-btn modal-close-trigger">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Test the building model inference adapter (<code>BuildingModel.predict</code>) on the Lalpur study area. Extracts building candidate footprints and tags them with <code>source=ai_building_model</code>.</p>
+        
+        <div class="form-group">
+          <label class="form-label">Model Architecture</label>
+          <select class="form-input" id="model-select">
+            <option value="Vaayu-UnetPP-Lite">Vaayu-UnetPP-Lite (ResNet34 Backbone, 0.033m GSD)</option>
+            <option value="TorchGeo-DeepLabV3">TorchGeo-DeepLabV3+ (Geospatial Pretrained)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Confidence Threshold</label>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <input type="range" id="model-conf-slider" min="0.3" max="0.95" step="0.05" value="0.5" style="flex: 1;" oninput="document.getElementById('conf-val').innerText = this.value">
+            <span id="conf-val" style="font-family: var(--font-mono); font-weight: 600;">0.50</span>
+          </div>
+        </div>
+
+        <div class="form-group" style="flex-direction: row; align-items: center; gap: 8px; margin-top: 6px;">
+          <input type="checkbox" id="model-simulate-failure">
+          <label for="model-simulate-failure" style="font-size: 11.5px; color: var(--accent-rose); cursor: pointer;">Simulate Model Inference Failure (Demonstrate UI error handling)</label>
+        </div>
+
+        <div id="model-inference-status" style="margin-top: 10px; min-height: 40px; font-size: 12px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary modal-close-trigger">Close</button>
+        <button class="btn btn-primary" id="btn-run-inference">Run Inference ⚡</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Benchmark Datasets Modal -->
+  <div class="modal-overlay" id="modal-benchmarks">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2>Official Benchmark Datasets & Evaluation Status</h2>
+        <button class="modal-close-btn modal-close-trigger">&times;</button>
+      </div>
+      <div class="modal-body" id="benchmark-content-area">
+        <!-- Loaded via model.js -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary modal-close-trigger">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Leaflet JS (Local Vendor with CDN fallback) -->
+  <script src="vendor/leaflet.js" onerror="this.onerror=null;this.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';"></script>
+  <!-- Application Bootstrap -->
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>
