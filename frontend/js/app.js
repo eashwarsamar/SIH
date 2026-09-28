@@ -171,22 +171,35 @@ class Application {
   }
 
   bindBasemapButtons() {
+    const btnGeotiff = document.getElementById('btn-basemap-geotiff');
     const btnOsm = document.getElementById('btn-basemap-osm');
     const btnNeutral = document.getElementById('btn-basemap-neutral');
+
+    const updateActive = (activeBtn) => {
+      [btnGeotiff, btnOsm, btnNeutral].forEach(b => {
+        if (b) b.classList.remove('active');
+      });
+      if (activeBtn) activeBtn.classList.add('active');
+    };
+
+    if (btnGeotiff) {
+      btnGeotiff.onclick = () => {
+        this.map.setBasemap('geotiff');
+        updateActive(btnGeotiff);
+      };
+    }
 
     if (btnOsm) {
       btnOsm.onclick = () => {
         this.map.setBasemap('osm');
-        btnOsm.classList.add('active');
-        if (btnNeutral) btnNeutral.classList.remove('active');
+        updateActive(btnOsm);
       };
     }
 
     if (btnNeutral) {
       btnNeutral.onclick = () => {
         this.map.setBasemap('neutral');
-        btnNeutral.classList.add('active');
-        if (btnOsm) btnOsm.classList.remove('active');
+        updateActive(btnNeutral);
       };
     }
   }
@@ -280,10 +293,21 @@ class Application {
   updateMetadataNotice(metadata) {
     const noticeEl = document.getElementById('raster-status-text');
     if (noticeEl && metadata.raster_orthomosaic_status) {
-      noticeEl.innerHTML = `
-        <strong>ECW Orthomosaic Status:</strong> ${metadata.raster_orthomosaic_status.browser_service_status}<br>
-        <span style="font-size: 11px;">${metadata.raster_orthomosaic_status.reason}</span>
-      `;
+      const ro = metadata.raster_orthomosaic_status;
+      if (ro.browser_service_status === 'AVAILABLE_LOCAL_XYZ_TILES') {
+        const sizeMb = (ro.file_size_bytes / (1024 * 1024)).toFixed(1);
+        noticeEl.innerHTML = `
+          <strong>Drone Raster (GeoTIFF):</strong> ${ro.filename}<br>
+          <span style="font-size: 10.5px; color: var(--accent-cyan);">Status: Active Local XYZ Tile Server (${sizeMb} MB, 4-band EPSG:3857)</span><br>
+          <span style="font-size: 10px; color: var(--text-faint);">Tiled dynamically via rasterio. OpenStreetMap attribution preserved.</span>
+        `;
+      } else {
+        noticeEl.innerHTML = `
+          <strong>Drone Raster Status:</strong> Offline / Fallback<br>
+          <span style="font-size: 10.5px; color: var(--accent-rose);">${ro.reason || 'GeoTIFF raster file unavailable.'}</span><br>
+          <span style="font-size: 10px; color: var(--text-faint);">Falling back to OpenStreetMap / Neutral Dark canvas.</span>
+        `;
+      }
     }
   }
 

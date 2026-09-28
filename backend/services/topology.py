@@ -1,30 +1,37 @@
 """
-Deterministic Topology Validation Engine using Shapely.
+Deterministic Topology Validation Engine using Shapely and CRS-aware metric geometry.
 Detects:
-1. Invalid / empty / self-intersecting geometry (safe handling)
-2. Overlapping polygons within a layer
-3. Building-road spatial intersections (neutral wording)
-4. Synthetic building crossing synthetic parcel polygon
-5. Enforces strictly: NO real parcel conflict warnings when real parcel layer has 0 features.
+1. Invalid / empty / self-intersecting geometry (safe handling via geometry_utils)
+2. Overlapping polygons within a layer (using metric EPSG:32643 intersection area)
+3. Building-road spatial intersections (neutral wording: 'spatial overlap—review visually')
+4. Building-parcel crossing / straddling (evaluated strictly on non-empty parcel layer)
+5. Enforces strictly: NO real parcel conflict warnings when real parcel layer has 0 features;
+   reports 'not evaluated: no parcel boundaries loaded'.
 """
 from typing import Dict, Any, List, Optional
 import shapely.geometry
 from shapely.validation import explain_validity
 from backend.models.schemas import TopologyWarning
+from backend.services.geometry_utils import calculate_metric_area_sqm, calculate_metric_intersection
 
 NEUTRAL_ROAD_OVERLAP_EXPLANATION = (
-    "Spatial overlap detected between building {bld_id} and road corridor {road_id}—review visually. "
+    "Spatial overlap detected between building {bld_id} and road corridor {road_id} (approx {area:.1f} m²)—review visually. "
     "Road corridors and centerlines are spatial references, not legal rights-of-way."
 )
 
 SYNTHETIC_ROAD_OVERLAP_EXPLANATION = (
     "Demonstration Warning: Spatial overlap detected between synthetic building {bld_id} "
-    "and synthetic road corridor {road_id}—review visually."
+    "and synthetic road corridor {road_id} (approx {area:.1f} m²)—review visually."
 )
 
 SYNTHETIC_PARCEL_CROSSING_EXPLANATION = (
     "Demonstration Warning: Synthetic building footprint {bld_id} crosses boundary of synthetic parcel {parcel_id}. "
     "This is a demonstration fixture; real Lalpur parcel dataset is 0 features."
+)
+
+REAL_PARCEL_CROSSING_EXPLANATION = (
+    "Building footprint {bld_id} crosses parcel boundary {parcel_id}. "
+    "Review boundaries visually against imagery."
 )
 
 SYNTHETIC_OVERLAP_EXPLANATION = (
@@ -103,7 +110,7 @@ def validate_feature_geometries(features: List[Dict[str, Any]], layer_source: st
     return warnings
 
 def check_polygon_overlaps(features: List[Dict[str, Any]], layer_source: str = "project_vaayu_sample") -> List[TopologyWarning]:
-    """Detects mutual overlaps among polygon features in the same layer."""
+    """Detects mutual overlaps among polygon features in the same layer using projected metric area."""
     warnings: List[TopologyWarning] = []
     parsed_shapes = []
     
@@ -121,10 +128,8 @@ def check_polygon_overlaps(features: List[Dict[str, Any]], layer_source: str = "
             id2, src2, s2 = parsed_shapes[j]
             try:
                 if s1.intersects(s2):
-                    inter = s1.intersection(s2)
-                    # Convert degree area roughly to m² (1 deg ≈ 111,000m at equator; 1 deg² ≈ 1.2e10 m², scale at lat 23 is ~1e10)
-                    area_m2 = inter.area * 1e10
-                    if area_m2 > 1.0: # Filter out microscopic numerical touching edges
+                    inter, area_m2 = calculate_metric_intersection(s1, s2)
+                    if area_m2 > 0.5:  # Filter out microscopic touching edges
                         is_synth = "synthetic" in src1 or "synthetic" in src2
                         explanation = (
                             SYNTHETIC_OVERLAP_EXPLANATION.format(id1=id1, id2=id2, area=area_m2)
@@ -140,7 +145,7 @@ def check_polygon_overlaps(features: List[Dict[str, Any]], layer_source: str = "
                             plain_language_rule="Building footprints or parcels should not overlap without a multi-level partition.",
                             source=src1 if is_synth else "project_vaayu_sample",
                             status="open",
-                            affected_coordinates=[inter.centroid.x, inter.centroid.y] if not inter.is_empty else None
+                            affected_coordinates=[inter.centroid.x, inter.centroid.y] if inter and not inter.is_empty else None
                         ))
             except Exception:
                 continue
@@ -154,6 +159,7 @@ def check_building_road_intersections(
     """
     Checks spatial overlaps between building polygons and road corridor polygons.
     Uses strictly NEUTRAL wording: 'spatial overlap—review visually'.
+    Calculates metric area using projected UTM 43N coordinates.
     """
     warnings: List[TopologyWarning] = []
     
@@ -177,14 +183,13 @@ def check_building_road_intersections(
         for rid, r_src, r_shape in roads:
             try:
                 if b_shape.intersects(r_shape):
-                    inter = b_shape.intersection(r_shape)
-                    inter_area_m2 = inter.area * 1e10 if inter.geom_type in ["Polygon", "MultiPolygon"] else 0.0
+                    inter, inter_area_m2 = calculate_metric_intersection(b_shape, r_shape)
                     
                     is_synth = "synthetic" in b_src or "synthetic" in r_src
                     explanation = (
-                        SYNTHETIC_ROAD_OVERLAP_EXPLANATION.format(bld_id=bid, road_id=rid)
+                        SYNTHETIC_ROAD_OVERLAP_EXPLANATION.format(bld_id=bid, road_id=rid, area=inter_area_m2)
                         if is_synth else
-                        NEUTRAL_ROAD_OVERLAP_EXPLANATION.format(bld_id=bid, road_id=rid)
+                        NEUTRAL_ROAD_OVERLAP_EXPLANATION.format(bld_id=bid, road_id=rid, area=inter_area_m2)
                     )
                     warnings.append(TopologyWarning(
                         warning_id=f"W-RD-OVERLAP-{bid}-{rid}",
@@ -195,20 +200,71 @@ def check_building_road_intersections(
                         plain_language_rule="Building footprint spatially intersects road corridor. Review imagery visually to confirm setback or alignment.",
                         source=b_src if is_synth else "project_vaayu_sample",
                         status="open",
-                        affected_coordinates=[inter.centroid.x, inter.centroid.y] if not inter.is_empty else None
+                        affected_coordinates=[inter.centroid.x, inter.centroid.y] if inter and not inter.is_empty else None
                     ))
             except Exception:
                 continue
                 
     return warnings
 
-def check_synthetic_parcel_crossings(synthetic_features: List[Dict[str, Any]]) -> List[TopologyWarning]:
+def check_building_parcel_crossings(
+    buildings: List[Dict[str, Any]],
+    parcels: List[Dict[str, Any]],
+    is_synthetic: bool = False
+) -> List[TopologyWarning]:
     """
-    Checks if synthetic building crosses synthetic parcel polygon boundary.
-    Exclusively run on synthetic demonstration features.
+    Checks if building footprint crosses/straddles parcel boundary.
+    Strictly executed only when the provided parcel list is non-empty.
     """
     warnings: List[TopologyWarning] = []
-    
+    if not parcels or len(parcels) == 0:
+        return warnings
+
+    parsed_buildings = []
+    for b in buildings:
+        bid = b.get("id") or b.get("properties", {}).get("feature_id")
+        bsrc = b.get("properties", {}).get("source", "synthetic_test" if is_synthetic else "project_vaayu_sample")
+        bshape = safe_parse_geometry(b.get("geometry"))
+        if bshape and bshape.is_valid:
+            parsed_buildings.append((bid, bsrc, bshape))
+
+    parsed_parcels = []
+    for p in parcels:
+        pid = p.get("id") or p.get("properties", {}).get("feature_id")
+        psrc = p.get("properties", {}).get("source", "synthetic_test" if is_synthetic else "manual_visual_reference")
+        pshape = safe_parse_geometry(p.get("geometry"))
+        if pshape and pshape.is_valid:
+            parsed_parcels.append((pid, psrc, pshape))
+
+    for bid, bsrc, bshape in parsed_buildings:
+        for pid, psrc, pshape in parsed_parcels:
+            try:
+                # Straddling check: intersects parcel, but is NOT completely contained within it
+                if bshape.intersects(pshape) and not pshape.contains(bshape):
+                    inter = bshape.intersection(pshape)
+                    explanation = (
+                        SYNTHETIC_PARCEL_CROSSING_EXPLANATION.format(bld_id=bid, parcel_id=pid)
+                        if is_synthetic else
+                        REAL_PARCEL_CROSSING_EXPLANATION.format(bld_id=bid, parcel_id=pid)
+                    )
+                    warnings.append(TopologyWarning(
+                        warning_id=f"W-PARCEL-CROSS-{bid}-{pid}",
+                        warning_type="building_crosses_synthetic_parcel" if is_synthetic else "building_road_spatial_overlap",
+                        severity="high",
+                        feature_ids=[bid, pid],
+                        explanation=explanation,
+                        plain_language_rule="Building footprint should be wholly inside parcel boundary without crossing parcel edge.",
+                        source=bsrc,
+                        status="open",
+                        affected_coordinates=[inter.centroid.x, inter.centroid.y] if not inter.is_empty else None
+                    ))
+            except Exception:
+                continue
+
+    return warnings
+
+def check_synthetic_parcel_crossings(synthetic_features: List[Dict[str, Any]]) -> List[TopologyWarning]:
+    """Checks if synthetic building crosses synthetic parcel polygon boundary."""
     synth_buildings = [
         f for f in synthetic_features 
         if f.get("properties", {}).get("feature_type") == "synthetic_building"
@@ -217,38 +273,7 @@ def check_synthetic_parcel_crossings(synthetic_features: List[Dict[str, Any]]) -
         f for f in synthetic_features 
         if f.get("properties", {}).get("feature_type") == "synthetic_parcel"
     ]
-    
-    for b in synth_buildings:
-        bid = b.get("id") or b.get("properties", {}).get("feature_id")
-        b_shape = safe_parse_geometry(b.get("geometry"))
-        if not b_shape or not b_shape.is_valid:
-            continue
-            
-        for p in synth_parcels:
-            pid = p.get("id") or p.get("properties", {}).get("feature_id")
-            p_shape = safe_parse_geometry(p.get("geometry"))
-            if not p_shape or not p_shape.is_valid:
-                continue
-                
-            try:
-                # Straddling check: intersects parcel, but is NOT completely contained within it
-                if b_shape.intersects(p_shape) and not p_shape.contains(b_shape):
-                    inter = b_shape.intersection(p_shape)
-                    warnings.append(TopologyWarning(
-                        warning_id=f"W-SYN-PARCEL-{bid}-{pid}",
-                        warning_type="building_crosses_synthetic_parcel",
-                        severity="high",
-                        feature_ids=[bid, pid],
-                        explanation=SYNTHETIC_PARCEL_CROSSING_EXPLANATION.format(bld_id=bid, parcel_id=pid),
-                        plain_language_rule="Demonstration Rule: Building footprint should be wholly inside parcel boundary without crossing parcel edge.",
-                        source="synthetic_test",
-                        status="open",
-                        affected_coordinates=[inter.centroid.x, inter.centroid.y] if not inter.is_empty else None
-                    ))
-            except Exception:
-                continue
-                
-    return warnings
+    return check_building_parcel_crossings(synth_buildings, synth_parcels, is_synthetic=True)
 
 def run_full_topology_validation(
     buildings: List[Dict[str, Any]],
@@ -283,9 +308,8 @@ def run_full_topology_validation(
     # 4. Synthetic parcel crossings
     all_warnings.extend(check_synthetic_parcel_crossings(synthetic_features))
     
-    # 5. Real parcel crossings: ONLY IF real parcels exist!
+    # 5. Real parcel crossings: GATED ON NON-EMPTY PARCELS!
     if real_parcels and len(real_parcels) > 0:
-        # We know real parcels are empty in Lalpur, but handle safely if a real parcel is ever provided
-        pass
+        all_warnings.extend(check_building_parcel_crossings(buildings, real_parcels, is_synthetic=False))
         
     return all_warnings

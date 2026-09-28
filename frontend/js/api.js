@@ -113,5 +113,17 @@ export const ApiClient = {
       throw new Error(err.detail || 'Failed to import GeoJSON bundle');
     }
     return res.json();
+  },
+
+  async getDiscrepancies() {
+    const res = await fetch(`${API_BASE}/models/discrepancy`);
+    if (!res.ok) throw new Error('Failed to fetch model vs reference discrepancies');
+    return res.json();
+  },
+
+  async getParcelRag() {
+    const res = await fetch(`${API_BASE}/parcels/rag`);
+    if (!res.ok) throw new Error('Failed to fetch parcel RAG status');
+    return res.json();
   }
 };

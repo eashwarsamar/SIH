@@ -53,6 +53,13 @@ export class MapController {
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(this.map);
 
     // Basemaps
+    this.basemaps.geotiff = L.tileLayer('/api/raster/tiles/{z}/{x}/{y}.png', {
+      maxZoom: 21,
+      minZoom: 14,
+      attribution: 'Drone Orthomosaic (3.38 cm GSD GeoTIFF) | &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>',
+      errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+    });
+
     this.basemaps.osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a>'
@@ -63,6 +70,8 @@ export class MapController {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
     });
 
+    // Default to geotiff basemap if available, otherwise fallback to osm
+    this.currentBasemap = 'geotiff';
     this.basemaps[this.currentBasemap].addTo(this.map);
 
     // Add all vector layers to map by default

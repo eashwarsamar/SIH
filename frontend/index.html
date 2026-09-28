@@ -33,6 +33,7 @@
     </div>
 
     <div class="header-actions">
+      <button class="btn btn-secondary" id="btn-open-discrepancy-modal">⚖️ Model vs Ref Discrepancy</button>
       <button class="btn btn-secondary" id="btn-open-model-modal">⚡ AI Building Model</button>
       <button class="btn btn-secondary" id="btn-open-benchmark-modal">📊 Benchmark Datasets</button>
       <input type="file" id="import-file-input" accept=".geojson,.json" style="display: none;" />
@@ -131,7 +132,7 @@
             <div class="layer-info">
               <div class="layer-color-dot" style="background: #c084fc;"></div>
               <div class="layer-name-wrap">
-                <span class="layer-name">Synthetic Test Data</span>
+                <span class="layer-name">Synthetic test data — not real parcels</span>
                 <span class="layer-meta"><span class="badge-synth">DEMO ONLY</span> • <span id="badge-count-synthetic">8</span> feats</span>
               </div>
             </div>
@@ -175,18 +176,21 @@
         <!-- Basemap Selection -->
         <div>
           <div class="section-title">Basemap</div>
-          <div class="basemap-group">
-            <button class="basemap-btn active" id="btn-basemap-osm">OpenStreetMap</button>
-            <button class="basemap-btn" id="btn-basemap-neutral">Neutral Dark</button>
+          <div class="basemap-group" style="grid-template-columns: 1fr;">
+            <button class="basemap-btn active" id="btn-basemap-geotiff">🛰️ Drone Orthomosaic (GeoTIFF)</button>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px;">
+              <button class="basemap-btn" id="btn-basemap-osm">OpenStreetMap</button>
+              <button class="basemap-btn" id="btn-basemap-neutral">Neutral Dark</button>
+            </div>
           </div>
         </div>
 
         <!-- Orthomosaic Status Card -->
-        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px; font-size: 11px; color: var(--text-muted);">
+        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 10px; font-size: 11px; color: var(--text-muted); margin-top: 10px;">
           <div id="raster-status-text">
-            <strong>Drone Raster (ECW):</strong> 20,137 x 20,886 px, 3.38 cm GSD<br>
+            <strong>Drone Raster (GeoTIFF):</strong> lalpur_orthomosaic.tif (3.38 cm GSD)<br>
             <span style="font-size: 10.5px; color: var(--text-faint);">
-              ECW requires proprietary ERDAS SDK. OpenStreetMap basemap is displayed with full attribution.
+              Georeferenced EPSG:3857 4-band orthomosaic loaded via local tiled XYZ service.
             </span>
           </div>
         </div>
@@ -217,7 +221,7 @@
       <div class="osm-attribution-bar">
         <div>
           <span>Lalpur AOI: EPSG:4326 RFC 7946 GeoJSON</span> • 
-          <span>Imagery GSD: 3.38 cm (Offline ECW)</span>
+          <span>Imagery GSD: 3.38 cm (GeoTIFF Orthomosaic)</span>
         </div>
         <div>
           Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap contributors</a> (ODbL 1.0)
@@ -325,6 +329,22 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary modal-close-trigger">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Model vs Reference Discrepancy Modal -->
+  <div class="modal-overlay" id="modal-discrepancy">
+    <div class="modal-window" style="max-width: 680px;">
+      <div class="modal-header">
+        <h2>Model vs Reference Discrepancies</h2>
+        <button class="modal-close-btn modal-close-trigger">&times;</button>
+      </div>
+      <div class="modal-body" id="discrepancy-content-area">
+        <p>Loading discrepancy comparison...</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary modal-close-trigger">Close</button>
       </div>
     </div>
   </div>

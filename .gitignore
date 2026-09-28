@@ -1,24 +1,78 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor / IDE artifacts
+.vscode/
+.idea/
+*.swp
+*~
 
 # SIH26012 Geospatial Data Acquisition & Privacy Rules
 data/acquisition/*/source/
+data/acquisition/*/working/
+data/acquisition/*/qgis/
 data/acquisition/*/*.ecw
 data/acquisition/*/*.tif
 data/acquisition/*/*.tiff
 data/acquisition/*/*.zip
 *.ecw
+*.tif
+*.tiff
+*.aux.xml
+*.qgz
+*.qgs
+*.geojson
 temp_vaayu_inspect/
 scratch/
+tiles/
 *.pth
+*.pt
+*.onnx
+*.bin
 *.dbf
 *.shp
 *.shx
 *.sbn
 *.sbx
-!data/acquisition/**/working/*.geojson
-!data/acquisition/**/metadata/*
-!data/acquisition/**/qgis/*
-!data/acquisition/**/README.md
-!data/acquisition/**/manifest_sha256.txt
 SIH26012_Comprehensive_Project_Blueprint (1).md
 prompt.md
+Implementation_Plan_*.md

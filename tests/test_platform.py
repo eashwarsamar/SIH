@@ -13,8 +13,12 @@ Tests all prompt-mandated finish criteria:
 10. Model adapter prediction success, confidence filtering, and simulated failure states.
 11. Benchmark dataset manifest and evaluation harness (IoU, precision, recall, F1).
 12. FastAPI HTTP endpoints end-to-end integration.
+13. CRS-aware projected metric geometry (EPSG:32643): area in m2, NOT degrees*constant.
+14. Discriminative scoring: features differ in score based on actual conflict, not shared provenance.
+15. Parcel-level RAG aggregation and gating.
 """
 import copy
+import math
 import pytest
 from fastapi.testclient import TestClient
 import shapely.geometry
@@ -34,10 +38,17 @@ from backend.services.topology import (
     validate_feature_geometries,
     check_polygon_overlaps,
     check_building_road_intersections,
-    check_synthetic_parcel_crossings
+    check_synthetic_parcel_crossings,
+    check_building_parcel_crossings
 )
 from backend.services.synthetic import get_synthetic_test_features, SYNTHETIC_LAYER_DISCLAIMER
-from backend.services.scoring import calculate_review_score, load_scoring_config
+from backend.services.scoring import calculate_review_score, load_scoring_config, aggregate_parcel_scores
+from backend.services.geometry_utils import (
+    calculate_metric_area_sqm,
+    calculate_metric_distance_meters,
+    calculate_metric_intersection,
+    safe_repair_geometry
+)
 from backend.services.model_adapter import (
     MockBuildingModel,
     BenchmarkDatasetAdapter,
@@ -429,7 +440,27 @@ class TestApiEndpoints:
         data = res.json()
         assert "OpenStreetMap" in data["osm_attribution"]
         assert "Project Vaayu sample" in data["provenance_disclaimer"]
-        assert "UNAVAILABLE_DIRECT_ECW" in data["raster_orthomosaic_status"]["browser_service_status"]
+        assert data["raster_orthomosaic_status"]["browser_service_status"] in ["AVAILABLE_LOCAL_XYZ_TILES", "UNAVAILABLE"]
+
+    def test_api_raster_status_and_tiles(self, client):
+        # Status endpoint
+        res = client.get("/api/raster/status")
+        assert res.status_code == 200
+        status_data = res.json()
+        assert status_data["status"] == "ready"
+        assert status_data["metadata"]["crs"] == "EPSG:3857"
+        assert status_data["metadata"]["bands"] == 4
+
+        # Tile endpoint inside bounds
+        tile_res = client.get("/api/raster/tiles/18/184052/113823.png")
+        assert tile_res.status_code == 200
+        assert tile_res.headers["content-type"] == "image/png"
+        assert len(tile_res.content) > 1000
+
+        # Tile outside bounds returns blank transparent tile without 404
+        out_res = client.get("/api/raster/tiles/18/100/100.png")
+        assert out_res.status_code == 200
+        assert out_res.headers["content-type"] == "image/png"
 
     def test_api_get_layers(self, client):
         for layer_name in ["buildings", "roads", "osm_roads", "parcels", "synthetic"]:
@@ -491,3 +522,342 @@ class TestApiEndpoints:
         imp_data = imp_res.json()
         assert imp_data["status"] == "success"
         assert imp_data["imported_count"] == len(bundle["features"])
+
+
+# ==============================================================================
+# 13. CRS-Aware Projected Metric Geometry Tests
+# ==============================================================================
+
+class TestMetricGeometryUtils:
+    def test_area_uses_projected_crs_not_degrees(self):
+        """Area must be in m², NOT degrees * constant approximation."""
+        # B-001 from Lalpur data: ~12.77 m² expected
+        poly_deg = shapely.geometry.Polygon([
+            [72.75728365790725, 23.04002668761225],
+            [72.75731772292114, 23.04002919486646],
+            [72.75732057507217, 23.039996387280304],
+            [72.75728651005828, 23.039993879198835],
+            [72.75728365790725, 23.04002668761225]
+        ])
+        area_m2 = calculate_metric_area_sqm(poly_deg)
+        # Must be in reasonable residential building range (m²), not tiny degree² value
+        assert 10 < area_m2 < 50, f"Expected ~12.77 m², got {area_m2}"
+        # Area in raw degrees should be orders of magnitude smaller
+        assert poly_deg.area < 1e-6, "Raw degree area should be negligible"
+
+    def test_area_larger_than_pure_degree_calculation(self):
+        """Projected area must be much larger than raw degree area."""
+        poly = shapely.geometry.Polygon([
+            [72.757, 23.040], [72.758, 23.040], [72.758, 23.041], [72.757, 23.041], [72.757, 23.040]
+        ])
+        raw_deg_area = poly.area
+        metric_area = calculate_metric_area_sqm(poly)
+        # Metric area should be roughly 100m x 100m ≈ 10000 m²; degree area is tiny
+        assert metric_area > raw_deg_area * 1e8, "Projected area must be vastly larger than degree area"
+
+    def test_distance_calculation_in_meters(self):
+        """Distance between two close points must be in metres."""
+        p1 = shapely.geometry.Point(72.757, 23.040)
+        p2 = shapely.geometry.Point(72.758, 23.040)
+        dist = calculate_metric_distance_meters(p1, p2)
+        # ~100m expected (1 degree longitude at 23°N ≈ 102m)
+        assert 80 < dist < 130, f"Expected ~100m, got {dist}"
+
+    def test_invalid_geometry_repair(self):
+        """Bowtie polygon should be repaired and flagged as repaired."""
+        bowtie = shapely.geometry.Polygon([[0, 0], [1, 1], [0, 1], [1, 0], [0, 0]])
+        assert not bowtie.is_valid
+        repaired, was_repaired, msg = safe_repair_geometry(bowtie)
+        assert was_repaired is True
+        assert repaired.is_valid
+
+    def test_valid_geometry_not_flagged_as_repaired(self):
+        """Valid polygon must not be flagged as repaired."""
+        valid_poly = shapely.geometry.box(0, 0, 10, 10)
+        _, was_repaired, _ = safe_repair_geometry(valid_poly)
+        assert was_repaired is False
+
+    def test_intersection_area_in_m2(self):
+        """Intersection area of two overlapping WGS84 polygons must be in m²."""
+        poly1 = shapely.geometry.Polygon([
+            [72.757, 23.040], [72.758, 23.040], [72.758, 23.041], [72.757, 23.041], [72.757, 23.040]
+        ])
+        poly2 = shapely.geometry.Polygon([
+            [72.7575, 23.040], [72.7585, 23.040], [72.7585, 23.041], [72.7575, 23.041], [72.7575, 23.040]
+        ])
+        inter_geom, area_m2 = calculate_metric_intersection(poly1, poly2)
+        assert inter_geom is not None
+        assert area_m2 > 100, f"Expected intersection area > 100 m², got {area_m2}"
+
+    def test_empty_geometry_returns_zero_area(self):
+        """Empty geometry must return 0.0 area without raising exceptions."""
+        empty = shapely.geometry.Polygon()
+        area = calculate_metric_area_sqm(empty)
+        assert area == 0.0
+
+
+# ==============================================================================
+# 14. Discriminative Scoring Tests
+# ==============================================================================
+
+class TestDiscriminativeScoring:
+    def test_no_conflict_feature_has_low_score(self):
+        """A clean feature with no warnings should not be scored high."""
+        clean_feat = {
+            "type": "Feature", "id": "CLEAN-01",
+            "properties": {
+                "feature_id": "CLEAN-01",
+                "feature_type": "building",
+                "source": "project_vaayu_sample",
+                "review_status": "unverified",
+                "area_sqm": 80.0
+            }
+        }
+        score = calculate_review_score(clean_feat, associated_warning_ids=[])
+        assert score.total_score <= 15, f"Clean feature should score low, got {score.total_score}"
+        assert score.priority == "low"
+
+    def test_overlap_warning_raises_score(self):
+        """Feature with overlap warning should have higher score than clean feature."""
+        conflicted_feat = {
+            "type": "Feature", "id": "CONFLICT-01",
+            "properties": {
+                "feature_id": "CONFLICT-01",
+                "feature_type": "building",
+                "source": "project_vaayu_sample",
+                "review_status": "unverified",
+                "area_sqm": 80.0
+            }
+        }
+        score = calculate_review_score(conflicted_feat, associated_warning_ids=["W-RD-OVERLAP-B-015-VR-004"])
+        assert score.total_score >= 40, f"Feature with overlap warning should score >= 40, got {score.total_score}"
+        rule_ids = {r.rule_id for r in score.rules_triggered}
+        assert "R_SPATIAL_OVERLAP_WARNING" in rule_ids
+
+    def test_invalid_geometry_warning_raises_score(self):
+        """Feature with INVALID geometry warning ID should trigger R_INVALID_GEOMETRY rule."""
+        invalid_feat = {
+            "type": "Feature", "id": "INVALID-01",
+            "properties": {
+                "feature_id": "INVALID-01",
+                "feature_type": "building",
+                "source": "project_vaayu_sample",
+                "review_status": "unverified",
+                "area_sqm": 80.0
+            }
+        }
+        score = calculate_review_score(invalid_feat, associated_warning_ids=["W-INVALID-INVALID-01"])
+        rule_ids = {r.rule_id for r in score.rules_triggered}
+        assert "R_INVALID_GEOMETRY" in rule_ids
+        assert score.total_score >= 40
+
+    def test_empty_geometry_warning_raises_score(self):
+        """Feature with EMPTY geometry warning ID should trigger R_EMPTY_GEOMETRY rule."""
+        empty_feat = {
+            "type": "Feature", "id": "EMPTY-01",
+            "properties": {
+                "feature_id": "EMPTY-01",
+                "feature_type": "building",
+                "source": "project_vaayu_sample",
+                "review_status": "unverified",
+                "area_sqm": 0.0
+            }
+        }
+        score = calculate_review_score(empty_feat, associated_warning_ids=["W-EMPTY-EMPTY-01"])
+        rule_ids = {r.rule_id for r in score.rules_triggered}
+        assert "R_EMPTY_GEOMETRY" in rule_ids
+
+    def test_conflict_features_score_higher_than_clean_features(self, clean_store):
+        """Across the full dataset, features with road-overlap warnings must score higher than clean ones."""
+        clean_scores = [
+            v.total_score for fid, v in clean_store.scores.items()
+            if not clean_store.find_feature(fid)[1]["properties"].get("warning_ids")
+        ]
+        conflicted_scores = [
+            v.total_score for fid, v in clean_store.scores.items()
+            if clean_store.find_feature(fid)[1]["properties"].get("warning_ids")
+        ]
+        if clean_scores and conflicted_scores:
+            assert max(clean_scores) < max(conflicted_scores), (
+                "Conflicted features must have higher max score than clean features"
+            )
+
+    def test_unverified_source_is_score_neutral(self):
+        """Unverified source must NOT add a discriminative score penalty on its own."""
+        feat_vaayu = {
+            "type": "Feature", "id": "VAAYU-01",
+            "properties": {
+                "feature_id": "VAAYU-01",
+                "feature_type": "building",
+                "source": "project_vaayu_sample",
+                "review_status": "unverified",
+                "area_sqm": 50.0
+            }
+        }
+        config = load_scoring_config()
+        r_source = next((r for r in config["rules"] if r["rule_id"] == "R_UNVERIFIED_SOURCE"), None)
+        # Source rule must be score-neutral (0 points)
+        assert r_source is not None
+        assert r_source["points"] == 0, (
+            "R_UNVERIFIED_SOURCE must be score-neutral (0 pts) to avoid dominating scores"
+        )
+
+
+# ==============================================================================
+# 15. Parcel-Level RAG Aggregation and Gating Tests
+# ==============================================================================
+
+class TestParcelRAGAggregation:
+    def test_empty_real_parcel_not_evaluated(self, clean_store):
+        """When parcel layer is empty, system must report 'not evaluated', not zero conflicts."""
+        real_parcels = clean_store.layers["parcels"]
+        assert len(real_parcels) == 0, "Real parcel layer must be 0 features in this AOI"
+        # No parcel-specific warnings should exist for the real layer
+        parcel_conflict_warns = [
+            w for w in clean_store.warnings
+            if "parcel" in w.warning_type and "synthetic" not in w.warning_type
+        ]
+        assert len(parcel_conflict_warns) == 0, (
+            "Must not produce real parcel conflict warnings when parcel layer is empty"
+        )
+
+    def test_parcel_rag_with_synthetic_fixtures(self):
+        """Synthetic parcel with crossing building must get RED RAG status."""
+        synth_parcel = {
+            "type": "Feature", "id": "SYN-PARCEL-DEMO-1",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[72.75865, 23.03950], [72.75920, 23.03950], [72.75920, 23.04000], [72.75865, 23.04000], [72.75865, 23.03950]]]
+            },
+            "properties": {
+                "feature_id": "SYN-PARCEL-DEMO-1",
+                "feature_type": "synthetic_parcel",
+                "source": "synthetic_test",
+                "verification_status": "unverified",
+                "review_status": "unverified"
+            }
+        }
+        crossing_warnings = ["W-SYN-PARCEL-SYN-BLD-PARCEL-CROSS-1-SYN-PARCEL-DEMO-1"]
+        rag = aggregate_parcel_scores(synth_parcel, [], [], crossing_warnings)
+        assert rag["is_synthetic"] is True
+        assert rag["synthetic_badge"] is not None
+        assert rag["rag_status"] == "RED"
+        assert rag["heuristic_disclaimer"] == "prototype heuristic—not a validated survey-priority model"
+
+    def test_parcel_rag_clean_parcel_is_green(self):
+        """A synthetic parcel with no warnings and no roads should be GREEN."""
+        clean_parcel = {
+            "type": "Feature", "id": "SYN-CLEAN-PARCEL",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[72.75, 23.04], [72.751, 23.04], [72.751, 23.041], [72.75, 23.041], [72.75, 23.04]]]
+            },
+            "properties": {
+                "feature_id": "SYN-CLEAN-PARCEL",
+                "feature_type": "synthetic_parcel",
+                "source": "synthetic_test",
+                "verification_status": "unverified",
+                "review_status": "unverified"
+            }
+        }
+        rag = aggregate_parcel_scores(clean_parcel, [], [], [])
+        assert rag["rag_status"] == "GREEN"
+
+    def test_real_parcel_crossing_gated(self):
+        """Real parcel crossing check must produce zero warnings if parcel list is empty."""
+        warnings = check_building_parcel_crossings([], [], is_synthetic=False)
+        assert len(warnings) == 0
+        warnings2 = check_building_parcel_crossings([{"type": "Feature", "id": "BLD-1", "geometry": None, "properties": {}}], [], is_synthetic=False)
+        assert len(warnings2) == 0
+
+
+# ==============================================================================
+# 16. Topology Edge Cases Tests
+# ==============================================================================
+
+class TestTopologyEdgeCases:
+    def test_empty_building_layer_no_crash(self):
+        """Empty building layer must produce zero warnings without error."""
+        warnings = run_full_topology_validation([], [], [], [])
+        assert len(warnings) == 0
+
+    def test_zero_area_geometry_handled_safely(self):
+        """Zero-area polygon must not cause exceptions in geometry checks."""
+        zero_poly_feat = {
+            "type": "Feature", "id": "ZERO-AREA-TEST",
+            "geometry": {"type": "Polygon", "coordinates": [[[72.757, 23.040], [72.757, 23.041], [72.757, 23.040]]]},
+            "properties": {"feature_id": "ZERO-AREA-TEST", "source": "synthetic_test"}
+        }
+        warnings = validate_feature_geometries([zero_poly_feat], "synthetic_test")
+        # Should produce invalid_geometry warning, not crash
+        assert isinstance(warnings, list)
+
+    def test_overlap_area_in_metric_m2(self):
+        """Overlap warning area values must be in m², distinguishable from degree² values."""
+        feat1 = {
+            "type": "Feature", "id": "OVER-1",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[72.757, 23.040], [72.758, 23.040], [72.758, 23.041], [72.757, 23.041], [72.757, 23.040]]]
+            },
+            "properties": {"source": "synthetic_test", "feature_id": "OVER-1"}
+        }
+        feat2 = {
+            "type": "Feature", "id": "OVER-2",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[72.7575, 23.040], [72.7585, 23.040], [72.7585, 23.041], [72.7575, 23.041], [72.7575, 23.040]]]
+            },
+            "properties": {"source": "synthetic_test", "feature_id": "OVER-2"}
+        }
+        warnings = check_polygon_overlaps([feat1, feat2], "synthetic_test")
+        assert len(warnings) == 1
+        # Overlap area in explanation should be in m² range (not fraction of degree²)
+        # The 50% overlap of ~10000m² polygon should be ~5000 m²
+        assert "m²" in warnings[0].explanation
+        # Extract numeric area from explanation
+        import re
+        match = re.search(r"([\d.]+) m²", warnings[0].explanation)
+        if match:
+            area_val = float(match.group(1))
+            assert area_val > 100, f"Overlap area {area_val} m² appears to be in degree units (should be > 100 m²)"
+
+
+# ==============================================================================
+# 17. Discrepancy & Parcel RAG Endpoints Tests
+# ==============================================================================
+
+class TestDiscrepancyAndParcelEndpoints:
+    def test_discrepancy_endpoint_no_predictions(self, client):
+        """GET /api/models/discrepancy should return no_predictions when AI layer is empty."""
+        res = client.get("/api/models/discrepancy")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] in ["no_predictions", "discrepancies_computed"]
+        assert "comparator_nature" in data or "disclaimer" in data
+
+    def test_discrepancy_endpoint_with_predictions(self, client):
+        """After running predict, /api/models/discrepancy should return structured discrepancy report."""
+        pred_res = client.post("/api/models/predict", json={"model_name": "Vaayu-UnetPP-Lite", "confidence_threshold": 0.5})
+        assert pred_res.status_code == 200
+
+        res = client.get("/api/models/discrepancy")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "discrepancies_computed"
+        assert "metrics" in data
+        assert "matched_pairs" in data
+        assert "model_only_features" in data
+        assert "reference_only_features" in data
+        assert "NOT temporal change detection" in data["disclaimer"]
+
+    def test_parcel_rag_endpoint_empty_real_parcels(self, client):
+        """GET /api/parcels/rag must report not_evaluated for real parcels when real parcel layer is empty."""
+        res = client.get("/api/parcels/rag")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["real_parcel_evaluation"]["status"] == "not_evaluated"
+        assert data["real_parcel_evaluation"]["real_parcel_count"] == 0
+        assert "synthetic_parcel_rag" in data
+        assert "Synthetic test data" in data["synthetic_parcel_rag"]["disclaimer"]
+

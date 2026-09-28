@@ -30,8 +30,8 @@
     {
       "rule_id": "R_UNVERIFIED_SOURCE",
       "rule_name": "Unverified Data Source",
-      "points": 25,
-      "description": "Feature originates from unverified Project Vaayu sample rather than ground-verified survey."
+      "points": 0,
+      "description": "Shared dataset provenance factor (informational badge; score-neutral to prevent score distortion)."
     },
     {
       "rule_id": "R_SPATIAL_OVERLAP_WARNING",
@@ -44,6 +44,12 @@
       "rule_name": "Geometry Anomaly / Invalid Ring",
       "points": 40,
       "description": "Feature geometry has self-intersections, bowties, or violates OGC validity."
+    },
+    {
+      "rule_id": "R_EMPTY_GEOMETRY",
+      "rule_name": "Empty or Null Geometry",
+      "points": 40,
+      "description": "Feature geometry contains an empty or null coordinate array."
     },
     {
       "rule_id": "R_EXTREME_DIMENSIONS",
@@ -60,13 +66,13 @@
     {
       "rule_id": "R_HUMAN_APPROVED",
       "rule_name": "Human Reviewer Approved",
-      "points": -50,
+      "points": -30,
       "description": "A human reviewer has explicitly inspected and marked this feature approved."
     },
     {
       "rule_id": "R_HUMAN_REJECTED",
       "rule_name": "Human Reviewer Rejected",
-      "points": -30,
+      "points": -20,
       "description": "Feature marked rejected by human reviewer (dispositioned)."
     }
   ]

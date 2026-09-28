@@ -5,14 +5,16 @@ transparent scoring, model inference stub, benchmark status, and GeoJSON export/
 """
 import os
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, HTTPException, status, Query, Body
+from fastapi import FastAPI, HTTPException, status, Query, Body, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 
 from backend.services.feature_store import store
 from backend.services.data_loader import PROVENANCE_DISCLAIMER
+from backend.services.raster_service import raster_tile_service
 from backend.services.model_adapter import MockBuildingModel, BenchmarkDatasetAdapter, ModelInferenceError
+from backend.services.scoring import aggregate_parcel_scores
 from backend.models.schemas import (
     GeometryEditRequest,
     FeatureStatusUpdateRequest,
@@ -72,13 +74,15 @@ def get_metadata():
             "native_raster_crs": "EPSG:3857 (Web Mercator)"
         },
         "raster_orthomosaic_status": {
-            "filename": "ortho_lalpur(511638)_3857.ecw",
-            "format": "ECW v2 (20,137 x 20,886 px, 3.38 cm GSD)",
-            "browser_service_status": "UNAVAILABLE_DIRECT_ECW",
-            "reason": (
-                "Proprietary ECW format requires ERDAS SDK which is absent in standard open-source GDAL/browsers. "
-                "OpenStreetMap basemap or neutral vector canvas is displayed with full attribution."
-            )
+            "filename": "lalpur_orthomosaic.tif",
+            "format": "GeoTIFF (4 bands, uint8, EPSG:3857, 20,137 x 20,886 px, 3.38 cm GSD)",
+            "bounds_epsg_3857": [8098996.3782, 2636558.4073, 8099677.1552, 2637264.506],
+            "file_size_bytes": 1682493007,
+            "browser_service_status": "AVAILABLE_LOCAL_XYZ_TILES" if raster_tile_service.is_available else "UNAVAILABLE",
+            "tile_url": "/api/raster/tiles/{z}/{x}/{y}.png",
+            "min_zoom": 14,
+            "max_zoom": 21,
+            "details": raster_tile_service.metadata
         },
         "provenance_disclaimer": PROVENANCE_DISCLAIMER,
         "cadastral_notice": (
@@ -88,6 +92,25 @@ def get_metadata():
         ),
         "osm_attribution": "© OpenStreetMap contributors (ODbL 1.0)"
     }
+
+@app.get("/api/raster/status")
+def get_raster_status():
+    """Returns technical metadata and availability of the local GeoTIFF orthomosaic."""
+    return {
+        "status": "ready" if raster_tile_service.is_available else "unavailable",
+        "metadata": raster_tile_service.metadata,
+        "tile_template": "/api/raster/tiles/{z}/{x}/{y}.png"
+    }
+
+@app.get("/api/raster/tiles/{z}/{x}/{y}.png")
+def get_raster_tile(z: int, x: int, y: int):
+    """Dynamically serves 256x256 Web Mercator PNG tile extracted from local GeoTIFF."""
+    tile_bytes = raster_tile_service.get_tile_png(z, x, y)
+    return Response(
+        content=tile_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"}
+    )
 
 @app.get("/api/layers/{layer_name}")
 def get_layer(layer_name: str):
@@ -247,6 +270,148 @@ def import_bundle(bundle: Dict[str, Any] = Body(...)):
         return res
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/parcels/rag")
+def get_parcel_rag():
+    """
+    Returns Red/Amber/Green parcel aggregation status.
+    When real parcel layer is empty (0 features), reports 'not_evaluated'.
+    When synthetic parcels present, aggregates with 'synthetic' badge.
+    """
+    store.initialize()
+    real_parcels = store.layers["parcels"]
+    synthetic_feats = store.layers["synthetic"]
+    synth_parcels = [f for f in synthetic_feats if f.get("properties", {}).get("feature_type") == "synthetic_parcel"]
+
+    if len(real_parcels) == 0:
+        real_parcel_status = {
+            "status": "not_evaluated",
+            "reason": "No real parcel polygons loaded for this AOI. "
+                      "Official cadastral parcel data is not available for Lalpur (LGD 511638). "
+                      "Use QGIS to digitize a manual_visual_reference layer and import it to enable parcel evaluation.",
+            "real_parcel_count": 0,
+            "disclaimer": "This status is NOT equivalent to 'zero conflicts'. "
+                          "It means evaluation was not performed due to absent reference data."
+        }
+    else:
+        real_parcel_status = {"status": "real_parcels_present", "real_parcel_count": len(real_parcels)}
+
+    # Synthetic RAG for demo
+    synth_rag_results = []
+    for parcel in synth_parcels:
+        pid = parcel.get("id") or parcel.get("properties", {}).get("feature_id")
+        parcel_warnings = [w.warning_id for w in store.warnings if pid in w.feature_ids]
+        intersecting_blds = [f for f in synthetic_feats if f.get("properties", {}).get("feature_type") == "synthetic_building"]
+        rag = aggregate_parcel_scores(parcel, intersecting_blds, [], parcel_warnings)
+        synth_rag_results.append(rag)
+
+    return {
+        "real_parcel_evaluation": real_parcel_status,
+        "synthetic_parcel_rag": {
+            "disclaimer": "Synthetic test data — not real parcels. Demo only.",
+            "parcel_count": len(synth_rag_results),
+            "results": synth_rag_results
+        },
+        "heuristic_disclaimer": "prototype heuristic—not a validated survey-priority model"
+    }
+
+
+@app.get("/api/models/discrepancy")
+def get_model_reference_discrepancy():
+    """
+    Model vs Reference Discrepancy Comparator.
+    Compares AI-predicted building footprints against the 317 Vaayu reference footprints
+    using spatial IoU matching within the same area. NOT temporal change detection.
+    The reference footprints are not an 'old' layer — they are same-area annotations.
+    """
+    store.initialize()
+    ai_preds = store.layers["ai_predictions"]
+    reference = store.layers["buildings"]
+
+    if not ai_preds:
+        return {
+            "status": "no_predictions",
+            "message": "No AI model predictions loaded. Run model inference first via POST /api/models/predict.",
+            "disclaimer": "This comparator shows same-area AI-vs-reference disagreement. "
+                          "It is NOT temporal change detection. Reference features are unverified annotations."
+        }
+
+    import shapely.geometry
+    from backend.services.model_adapter import BenchmarkDatasetAdapter
+
+    def parse_shape(feat):
+        geom = feat.get("geometry")
+        if not geom:
+            return None
+        try:
+            s = shapely.geometry.shape(geom)
+            return s if s.is_valid else None
+        except Exception:
+            return None
+
+    ref_shapes = [(f["id"], parse_shape(f)) for f in reference]
+    ref_shapes = [(fid, s) for fid, s in ref_shapes if s]
+    pred_shapes = [(f["id"], parse_shape(f)) for f in ai_preds]
+    pred_shapes = [(fid, s) for fid, s in pred_shapes if s]
+
+    iou_threshold = 0.35
+    matched_ref = set()
+    matched_pred = set()
+    matched_pairs = []
+
+    for pid, ps in pred_shapes:
+        best_iou = 0.0
+        best_rid = None
+        for rid, rs in ref_shapes:
+            if rid in matched_ref:
+                continue
+            iou = BenchmarkDatasetAdapter.compute_polygon_iou(rs, ps)
+            if iou > best_iou:
+                best_iou = iou
+                best_rid = rid
+        if best_iou >= iou_threshold and best_rid:
+            matched_ref.add(best_rid)
+            matched_pred.add(pid)
+            matched_pairs.append({"ai_id": pid, "ref_id": best_rid, "iou": round(best_iou, 4)})
+
+    model_only = [pid for pid, _ in pred_shapes if pid not in matched_pred]
+    ref_only = [rid for rid, _ in ref_shapes if rid not in matched_ref]
+
+    tp = len(matched_pred)
+    fp = len(model_only)
+    fn = len(ref_only)
+    precision = round(tp / (tp + fp), 4) if (tp + fp) > 0 else 0.0
+    recall = round(tp / (tp + fn), 4) if (tp + fn) > 0 else 0.0
+    f1 = round((2 * precision * recall) / (precision + recall), 4) if (precision + recall) > 0 else 0.0
+
+    return {
+        "status": "discrepancies_computed",
+        "comparator_nature": "Same-area spatial disagreement check (NOT temporal change detection)",
+        "disclaimer": "Model vs Reference Discrepancy: same-area AI-vs-annotation disagreement check. "
+                      "NOT temporal change detection. 317 reference footprints are unverified visual annotations "
+                      "(Project Vaayu sample, not ground truth). This is a prototype heuristic.",
+        "iou_matching_threshold": iou_threshold,
+        "metrics": {
+            "matched_pairs_count": len(matched_pairs),
+            "model_only_detections": len(model_only),
+            "reference_only_footprints": len(ref_only),
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1
+        },
+        "total_reference_features": len(ref_shapes),
+        "total_ai_predictions": len(pred_shapes),
+        "matched_pairs": matched_pairs[:20],
+        "model_only_features": model_only[:20],
+        "reference_only_features": ref_only[:20],
+        "interpretation": {
+            "matched": "AI and reference overlap at IoU >= threshold — spatial agreement",
+            "model_only": "AI detected footprint not found in reference — possible false positive or unmapped building",
+            "ref_only": "Reference footprint not found in AI predictions — possible missed detection"
+        }
+    }
+
 
 # Mount static frontend files if folder exists
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
