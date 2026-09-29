@@ -73,6 +73,7 @@ tiles/
 *.shx
 *.sbn
 *.sbx
+data/local_model_run/
 SIH26012_Comprehensive_Project_Blueprint (1).md
 prompt.md
 Implementation_Plan_*.md

@@ -285,13 +285,22 @@
         <button class="modal-close-btn modal-close-trigger">&times;</button>
       </div>
       <div class="modal-body">
-        <p>Test the building model inference adapter (<code>BuildingModel.predict</code>) on the Lalpur study area. Extracts building candidate footprints and tags them with <code>source=ai_building_model</code>.</p>
+        <p>Run building model inference over the Lalpur orthomosaic. Extracts footprint predictions and tags them with <code>source=ai_building_model</code>.</p>
         
+        <div class="form-group">
+          <label class="form-label">Inference Mode</label>
+          <select class="form-input" id="model-mode-select">
+            <option value="live">Live Model Inference (WHU U-Net++ EfficientNet-B4 over Lalpur TIFF)</option>
+            <option value="mock">Mock Provider Fallback (Simulated footprints)</option>
+            <option value="precomputed">Precomputed Demo Output (Saved run manifest)</option>
+          </select>
+        </div>
+
         <div class="form-group">
           <label class="form-label">Model Architecture</label>
           <select class="form-input" id="model-select">
-            <option value="Vaayu-UnetPP-Lite">Vaayu-UnetPP-Lite (ResNet34 Backbone, 0.033m GSD)</option>
-            <option value="TorchGeo-DeepLabV3">TorchGeo-DeepLabV3+ (Geospatial Pretrained)</option>
+            <option value="giswqs/whu-building-unetplusplus-efficientnet-b4">WHU Building Detection (U-Net++ EfficientNet-B4, 0.30m GSD)</option>
+            <option value="Vaayu-UnetPP-Lite">Vaayu-UnetPP-Lite (Mock fallback)</option>
           </select>
         </div>
 
@@ -333,15 +342,15 @@
     </div>
   </div>
 
-  <!-- 4. Model vs Reference Discrepancy Modal -->
+  <!-- 4. AI vs Reference Discrepancy Modal -->
   <div class="modal-overlay" id="modal-discrepancy">
     <div class="modal-window" style="max-width: 680px;">
       <div class="modal-header">
-        <h2>Model vs Reference Discrepancies</h2>
+        <h2>AI vs Reference Discrepancy</h2>
         <button class="modal-close-btn modal-close-trigger">&times;</button>
       </div>
       <div class="modal-body" id="discrepancy-content-area">
-        <p>Loading discrepancy comparison...</p>
+        <p>Loading AI vs reference discrepancy comparison...</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary modal-close-trigger">Close</button>

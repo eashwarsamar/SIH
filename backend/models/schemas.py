@@ -163,8 +163,9 @@ class DraftFeatureCreateRequest(BaseModel):
     reviewer_label: str = "demo-reviewer"
 
 class ModelPredictRequest(BaseModel):
-    model_name: str = "Vaayu-UnetPP-Lite"
-    model_version: str = "0.1.0-mock"
+    mode: Literal["live", "mock", "precomputed"] = "mock"
+    model_name: str = "giswqs/whu-building-unetplusplus-efficientnet-b4"
+    model_version: str = "09df9efd323bbd3d56b98b4857129eb9b5baa2d3"
     confidence_threshold: float = 0.5
     simulate_failure: bool = False
 

@@ -1,0 +1,5 @@
+# Model dependencies for SIH26012 Building Model Inference
+segmentation-models-pytorch>=0.3.3
+huggingface-hub>=0.20.0
+timm>=0.9.0
+torchvision>=0.15.0

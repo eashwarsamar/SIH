@@ -1,8 +1,10 @@
 """
 Feature Store and State Manager for SIH26012 Feature Review Platform.
 Maintains in-memory layer collections, handles human edits with immutable original_geometry,
-dynamic re-calculation of topology warnings, and review-priority scoring.
+dynamic re-calculation of topology warnings, review-priority scoring, and persistent disk storage.
 """
+import os
+import json
 import copy
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
@@ -19,10 +21,13 @@ from backend.services.topology import run_full_topology_validation
 from backend.services.scoring import calculate_review_score
 from backend.models.schemas import TopologyWarning, ReviewScoreBreakdown
 
+STATE_FILE_PATH = "data/local_model_run/store_state.json"
+
 class FeatureStore:
-    """Central state manager for the local prototype."""
+    """Central state manager for the local prototype with local disk persistence."""
     
-    def __init__(self):
+    def __init__(self, state_file_path: str = STATE_FILE_PATH):
+        self.state_file_path = state_file_path
         self.layers: Dict[str, List[Dict[str, Any]]] = {
             "buildings": [],
             "roads": [],
@@ -37,11 +42,11 @@ class FeatureStore:
         self.is_initialized = False
 
     def initialize(self, force_reload: bool = False) -> None:
-        """Loads all reference layers, synthetic test fixtures, runs initial topology checks and scoring."""
+        """Loads reference layers, synthetic test fixtures, and merges persisted user state."""
         if self.is_initialized and not force_reload:
             return
 
-        # Load GeoJSON files
+        # Load baseline GeoJSON files
         bld_col = load_lalpur_buildings()
         self.layers["buildings"] = bld_col["features"]
 
@@ -56,9 +61,76 @@ class FeatureStore:
 
         # Load synthetic test fixtures
         self.layers["synthetic"] = get_synthetic_test_features()
+        self.layers["drafts"] = []
+        self.layers["ai_predictions"] = []
+
+        # Load persisted local edits & predictions if available
+        self._load_persisted_state()
 
         self.revalidate_all()
         self.is_initialized = True
+
+    def _save_persisted_state(self) -> None:
+        """Saves user edits, drafts, and AI predictions to local disk state file."""
+        os.makedirs(os.path.dirname(self.state_file_path), exist_ok=True)
+
+        # Collect modified reference features
+        modified_features = {}
+        for layer_name in ["buildings", "roads", "osm_roads", "parcels", "synthetic"]:
+            for feat in self.layers[layer_name]:
+                fid = feat.get("id")
+                props = feat.get("properties", {})
+                orig_geom = feat.get("original_geometry")
+                geom = feat.get("geometry")
+                
+                if props.get("review_status") != "unverified" or props.get("notes") or (orig_geom and orig_geom != geom):
+                    modified_features[fid] = {
+                        "properties": props,
+                        "geometry": geom,
+                        "original_geometry": orig_geom
+                    }
+
+        state_doc = {
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "drafts": self.layers["drafts"],
+            "ai_predictions": self.layers["ai_predictions"],
+            "modified_features": modified_features
+        }
+
+        with open(self.state_file_path, "w") as f:
+            json.dump(state_doc, f, indent=2)
+
+    def _load_persisted_state(self) -> None:
+        """Loads and merges saved state from disk into baseline layers."""
+        if not os.path.exists(self.state_file_path):
+            return
+
+        try:
+            with open(self.state_file_path, "r") as f:
+                state_doc = json.load(f)
+
+            if "drafts" in state_doc and isinstance(state_doc["drafts"], list):
+                self.layers["drafts"] = state_doc["drafts"]
+
+            if "ai_predictions" in state_doc and isinstance(state_doc["ai_predictions"], list):
+                self.layers["ai_predictions"] = state_doc["ai_predictions"]
+
+            modified = state_doc.get("modified_features", {})
+            if isinstance(modified, dict):
+                for layer_name in ["buildings", "roads", "osm_roads", "parcels", "synthetic"]:
+                    for feat in self.layers[layer_name]:
+                        fid = feat.get("id")
+                        if fid in modified:
+                            saved_mod = modified[fid]
+                            if "properties" in saved_mod:
+                                feat["properties"].update(saved_mod["properties"])
+                            if "geometry" in saved_mod:
+                                feat["geometry"] = saved_mod["geometry"]
+                            if "original_geometry" in saved_mod:
+                                feat["original_geometry"] = saved_mod["original_geometry"]
+        except Exception as e:
+            # Fallback gracefully if state file is corrupted
+            pass
 
     def revalidate_all(self) -> None:
         """Runs topology validation and recalculates scores across all active features."""
@@ -71,7 +143,6 @@ class FeatureStore:
             synthetic_features=self.layers["synthetic"]
         )
 
-        # Build feature_id -> list of warning_ids mapping
         feat_warnings_map: Dict[str, List[str]] = {}
         for w in self.warnings:
             for fid in w.feature_ids:
@@ -79,7 +150,6 @@ class FeatureStore:
                     feat_warnings_map[fid] = []
                 feat_warnings_map[fid].append(w.warning_id)
 
-        # Calculate scores for all features in layers
         self.scores.clear()
         for layer_name, feature_list in self.layers.items():
             for feat in feature_list:
@@ -98,7 +168,6 @@ class FeatureStore:
             raise KeyError(f"Unknown layer: {layer_name}")
 
         features = self.layers[layer_name]
-        
         metadata: Dict[str, Any] = {
             "total_features": len(features),
             "crs": "EPSG:4326 (WGS 84 / RFC 7946)"
@@ -160,22 +229,36 @@ class FeatureStore:
         """Updates feature review status, notes, and reviewer audit fields."""
         found = self.find_feature(feature_id)
         if not found:
-            raise KeyError(f"Feature not found: {feature_id}")
+            raise KeyError(f"Feature with ID '{feature_id}' not found.")
 
         layer_name, feat = found
         props = feat["properties"]
+
+        valid_statuses = ["unverified", "under_review", "approved", "rejected"]
+        if review_status not in valid_statuses:
+            raise ValueError(f"Invalid review_status '{review_status}'. Valid choices: {valid_statuses}")
+
         props["review_status"] = review_status
-        props["edited_by"] = reviewer_label
-        props["edited_at"] = datetime.now(timezone.utc).isoformat()
+        props["last_reviewed_by"] = reviewer_label
+        props["edited_by"] = reviewer_label  # alias for test compatibility
+        props["last_reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        props["edited_at"] = props["last_reviewed_at"]  # alias for test compatibility
         if notes is not None:
             props["notes"] = notes
 
-        # Recompute score for this feature
-        w_ids = props.get("warning_ids", [])
-        score_bd = calculate_review_score(feat, associated_warning_ids=w_ids)
-        self.scores[feature_id] = score_bd
-        props["review_score"] = score_bd.total_score
+        if "audit_history" not in props:
+            props["audit_history"] = []
 
+        props["audit_history"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": "status_update",
+            "reviewer": reviewer_label,
+            "new_status": review_status,
+            "notes": notes
+        })
+
+        self.revalidate_all()
+        self._save_persisted_state()
         return feat
 
     def update_feature_geometry(
@@ -183,72 +266,93 @@ class FeatureStore:
         feature_id: str,
         new_geometry: Dict[str, Any],
         reviewer_label: str = "demo-reviewer",
-        edit_reason: str = "Boundary adjustment"
+        edit_reason: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Updates geometry while preserving original_geometry immutable audit copy.
-        Updates edited_by, edited_at, and edit_reason.
-        """
+        """Updates feature geometry while preserving original_geometry baseline."""
         found = self.find_feature(feature_id)
         if not found:
-            raise KeyError(f"Feature not found: {feature_id}")
+            raise KeyError(f"Feature with ID '{feature_id}' not found.")
 
         layer_name, feat = found
-        # Retain original geometry if not already set
+
         if "original_geometry" not in feat or feat["original_geometry"] is None:
             feat["original_geometry"] = copy.deepcopy(feat["geometry"])
 
-        feat["geometry"] = new_geometry
+        feat["geometry"] = copy.deepcopy(new_geometry)
         props = feat["properties"]
-        props["edited_by"] = reviewer_label
-        props["edited_at"] = datetime.now(timezone.utc).isoformat()
-        props["edit_reason"] = edit_reason
+        props["is_manually_edited"] = True
+        props["last_edited_by"] = reviewer_label
+        props["edited_by"] = reviewer_label  # alias for test compatibility
+        props["last_edited_at"] = datetime.now(timezone.utc).isoformat()
+        props["edited_at"] = props["last_edited_at"]  # alias for test compatibility
+        props["edit_reason"] = edit_reason or "Manual geometry refinement"
 
-        # Re-run validation because geometry changed
+        if "audit_history" not in props:
+            props["audit_history"] = []
+
+        props["audit_history"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": "geometry_edit",
+            "reviewer": reviewer_label,
+            "edit_reason": edit_reason or "Manual geometry refinement"
+        })
+
         self.revalidate_all()
+        self._save_persisted_state()
         return feat
 
     def revert_feature_geometry(self, feature_id: str) -> Dict[str, Any]:
-        """Reverts feature geometry back to original_geometry snapshot."""
+        """Reverts feature geometry back to original baseline."""
         found = self.find_feature(feature_id)
         if not found:
-            raise KeyError(f"Feature not found: {feature_id}")
+            raise KeyError(f"Feature with ID '{feature_id}' not found.")
 
         layer_name, feat = found
         if "original_geometry" in feat and feat["original_geometry"] is not None:
             feat["geometry"] = copy.deepcopy(feat["original_geometry"])
-            feat["properties"]["edit_reason"] = "Reverted to initial unedited geometry"
-            feat["properties"]["edited_at"] = datetime.now(timezone.utc).isoformat()
-            self.revalidate_all()
+            props = feat["properties"]
+            props["is_manually_edited"] = False
+            revert_reason = "Reverted to unedited original baseline"
+            props["edit_reason"] = revert_reason  # test checks "Reverted" in edit_reason
 
+            if "audit_history" not in props:
+                props["audit_history"] = []
+
+            props["audit_history"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "action": "revert_geometry",
+                "notes": revert_reason
+            })
+
+        self.revalidate_all()
+        self._save_persisted_state()
         return feat
 
     def add_draft_feature(
         self,
         geometry: Dict[str, Any],
         feature_type: str = "draft_polygon",
-        notes: str = "Manual draft reference",
+        notes: str = "",
         reviewer_label: str = "demo-reviewer"
     ) -> Dict[str, Any]:
-        """Creates a human-digitized review draft feature (tagged manual_visual_reference)."""
+        """Adds a newly drawn draft feature tagged manual_visual_reference."""
         self.initialize()
-        draft_count = len(self.layers["drafts"]) + 1
-        draft_id = f"DRAFT-{draft_count:03d}"
+        draft_id = f"DRAFT-{len(self.layers['drafts']) + 1:03d}"
+        now_iso = datetime.now(timezone.utc).isoformat()
 
         new_feat = {
             "type": "Feature",
             "id": draft_id,
-            "geometry": geometry,
+            "geometry": copy.deepcopy(geometry),
             "properties": {
                 "feature_id": draft_id,
                 "feature_type": feature_type,
                 "source": "manual_visual_reference",
-                "source_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "verification_status": "unverified",
                 "review_status": "under_review",
-                "notes": notes,
+                "notes": notes or "User-created manual reference boundary",
                 "edited_by": reviewer_label,
-                "edited_at": datetime.now(timezone.utc).isoformat(),
+                "edited_at": now_iso,
                 "locality": "Lalpur",
                 "provenance_citation": "Manual human visual trace created in local reviewer UI."
             },
@@ -257,6 +361,7 @@ class FeatureStore:
 
         self.layers["drafts"].append(new_feat)
         self.revalidate_all()
+        self._save_persisted_state()
         return new_feat
 
     def add_ai_predicted_features(self, features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -271,13 +376,11 @@ class FeatureStore:
             added.append(f_copy)
             
         self.revalidate_all()
+        self._save_persisted_state()
         return added
 
     def export_reviewed_bundle(self) -> Dict[str, Any]:
-        """
-        Exports all reviewed and active features into a single RFC 7946 GeoJSON bundle
-        with audit trail, metadata, and transparent provenance citations.
-        """
+        """Exports all reviewed and active features into a single RFC 7946 GeoJSON bundle."""
         self.initialize()
         all_features = []
         for layer_name in ["buildings", "roads", "osm_roads", "synthetic", "drafts", "ai_predictions"]:
@@ -318,7 +421,6 @@ class FeatureStore:
         if not isinstance(imported_features, list):
             raise ValueError("Malformed GeoJSON: missing features list.")
 
-        # Group by layer
         layer_buckets: Dict[str, List[Dict[str, Any]]] = {
             "buildings": [],
             "roads": [],
@@ -336,12 +438,12 @@ class FeatureStore:
                 layer = "buildings"
             layer_buckets[layer].append(feat)
 
-        # Update layers
         for layer, feats in layer_buckets.items():
             if feats:
                 self.layers[layer] = feats
 
         self.revalidate_all()
+        self._save_persisted_state()
         return {
             "status": "success",
             "imported_count": len(imported_features),

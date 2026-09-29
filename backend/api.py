@@ -228,25 +228,71 @@ def create_draft(req: DraftFeatureCreateRequest):
     )
     return {"status": "success", "feature": draft}
 
+from fastapi import FastAPI, HTTPException, status, Query, Body, Response, BackgroundTasks
+from backend.services.model_adapter import MockBuildingModel, WHUBuildingModel, BenchmarkDatasetAdapter, ModelInferenceError
+from backend.services.whu_model import job_manager, run_whu_live_inference
+
 @app.post("/api/models/predict")
 def predict_building_model(req: ModelPredictRequest):
-    """Triggers building model inference mock provider."""
-    model = MockBuildingModel(model_name=req.model_name, model_version=req.model_version)
+    """
+    Triggers building model inference using specified mode:
+    - 'live': Live model inference running WHU U-Net++ EfficientNet-B4 over Lalpur raster
+    - 'mock': Mock provider fallback for developer verification
+    - 'precomputed': Demo output loaded from local manifest
+    """
+    if req.mode == "live":
+        model = WHUBuildingModel(model_name=req.model_name, model_version=req.model_version)
+    else:
+        model = MockBuildingModel(model_name=req.model_name, model_version=req.model_version)
+
     try:
         result = model.predict(
             confidence_threshold=req.confidence_threshold,
             simulate_failure=req.simulate_failure
         )
-        # Add generated features to active store
         added_features = store.add_ai_predicted_features(result["features"])
         return {
             "status": "success",
+            "mode": req.mode,
             "detected_count": len(added_features),
             "features": added_features,
             "metadata": result.get("model_metadata")
         }
     except ModelInferenceError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@app.post("/api/models/run-inference")
+def start_live_model_job(background_tasks: BackgroundTasks, confidence_threshold: float = Body(0.50, embed=True)):
+    """
+    Launches a local, bounded background job for WHU building model inference
+    without freezing the web server request or UI.
+    """
+    status_info = job_manager.get_status()
+    if status_info["status"] == "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An inference job ({status_info['job_id']}) is already in progress ({status_info['progress_percent']}%)."
+        )
+
+    def _run_task():
+        try:
+            res = run_whu_live_inference(confidence_threshold=confidence_threshold)
+            store.add_ai_predicted_features(res.get("features", []))
+        except Exception as e:
+            job_manager.fail_job(str(e))
+
+    background_tasks.add_task(_run_task)
+    return {
+        "status": "started",
+        "message": "Live model inference job started in background thread.",
+        "status_endpoint": "/api/models/job-status"
+    }
+
+@app.get("/api/models/job-status")
+def get_inference_job_status():
+    """Returns status, tile count, duration, device, and result summary of background inference job."""
+    return job_manager.get_status()
+
 
 @app.get("/api/models/benchmarks")
 def get_benchmarks():
@@ -318,7 +364,7 @@ def get_parcel_rag():
 
 
 @app.get("/api/models/discrepancy")
-def get_model_reference_discrepancy():
+def get_model_reference_discrepancy(iou_threshold: float = Query(0.35, ge=0.05, le=0.95)):
     """
     Model vs Reference Discrepancy Comparator.
     Compares AI-predicted building footprints against the 317 Vaayu reference footprints
@@ -334,7 +380,8 @@ def get_model_reference_discrepancy():
             "status": "no_predictions",
             "message": "No AI model predictions loaded. Run model inference first via POST /api/models/predict.",
             "disclaimer": "This comparator shows same-area AI-vs-reference disagreement. "
-                          "It is NOT temporal change detection. Reference features are unverified annotations."
+                          "It is NOT temporal change detection. Reference features are unverified annotations.",
+            "alignment_status": "provisional—reference alignment not user-confirmed"
         }
 
     import shapely.geometry
@@ -355,7 +402,6 @@ def get_model_reference_discrepancy():
     pred_shapes = [(f["id"], parse_shape(f)) for f in ai_preds]
     pred_shapes = [(fid, s) for fid, s in pred_shapes if s]
 
-    iou_threshold = 0.35
     matched_ref = set()
     matched_pred = set()
     matched_pairs = []
@@ -387,6 +433,7 @@ def get_model_reference_discrepancy():
 
     return {
         "status": "discrepancies_computed",
+        "alignment_status": "provisional—reference alignment not user-confirmed",
         "comparator_nature": "Same-area spatial disagreement check (NOT temporal change detection)",
         "disclaimer": "Model vs Reference Discrepancy: same-area AI-vs-annotation disagreement check. "
                       "NOT temporal change detection. 317 reference footprints are unverified visual annotations "

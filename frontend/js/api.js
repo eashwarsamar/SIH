@@ -78,13 +78,14 @@ export const ApiClient = {
     return res.json();
   },
 
-  async runModelInference(modelName, confidenceThreshold = 0.5, simulateFailure = false) {
+  async runModelInference(mode = 'live', modelName = 'giswqs/whu-building-unetplusplus-efficientnet-b4', confidenceThreshold = 0.5, simulateFailure = false) {
     const res = await fetch(`${API_BASE}/models/predict`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        mode,
         model_name: modelName,
-        model_version: '0.1.0-mock',
+        model_version: '09df9efd323bbd3d56b98b4857129eb9b5baa2d3',
         confidence_threshold: confidenceThreshold,
         simulate_failure: simulateFailure
       })
@@ -93,6 +94,25 @@ export const ApiClient = {
       const err = await res.json();
       throw new Error(err.detail || 'Model inference failed');
     }
+    return res.json();
+  },
+
+  async runLiveModelJob(confidenceThreshold = 0.50) {
+    const res = await fetch(`${API_BASE}/models/run-inference`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confidence_threshold: confidenceThreshold })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Failed to start live model job');
+    }
+    return res.json();
+  },
+
+  async getJobStatus() {
+    const res = await fetch(`${API_BASE}/models/job-status`);
+    if (!res.ok) throw new Error('Failed to fetch job status');
     return res.json();
   },
 
@@ -115,8 +135,8 @@ export const ApiClient = {
     return res.json();
   },
 
-  async getDiscrepancies() {
-    const res = await fetch(`${API_BASE}/models/discrepancy`);
+  async getDiscrepancies(iouThreshold = 0.35) {
+    const res = await fetch(`${API_BASE}/models/discrepancy?iou_threshold=${iouThreshold}`);
     if (!res.ok) throw new Error('Failed to fetch model vs reference discrepancies');
     return res.json();
   },

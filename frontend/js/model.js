@@ -45,22 +45,25 @@ export class ModelModalController {
   }
 
   openModelModal() {
-    this.modelModal.classList.add('active');
+    if (this.modelModal) this.modelModal.classList.add('active');
   }
 
-  async openDiscrepancyModal() {
+  async openDiscrepancyModal(iouThreshold = 0.35) {
     if (!this.discrepancyModal) return;
     this.discrepancyModal.classList.add('active');
     const contentBox = document.getElementById('discrepancy-content-area');
     if (!contentBox) return;
 
-    contentBox.innerHTML = '<p>Evaluating model vs reference spatial discrepancies...</p>';
+    contentBox.innerHTML = '<p>Evaluating AI vs reference spatial discrepancies...</p>';
     try {
-      const data = await ApiClient.getDiscrepancies();
+      const data = await ApiClient.getDiscrepancies(iouThreshold);
       if (data.status === 'no_predictions') {
         contentBox.innerHTML = `
           <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 12px; color: #fbbf24; margin-bottom: 12px; font-size: 12px;">
             ℹ️ ${data.message}
+          </div>
+          <div style="font-size: 11px; color: var(--accent-amber); margin-bottom: 8px;">
+            ⚠️ Status: <strong>${data.alignment_status}</strong>
           </div>
           <p style="font-size: 11.5px; color: var(--text-muted);">${data.disclaimer}</p>
         `;
@@ -69,9 +72,22 @@ export class ModelModalController {
 
       const m = data.metrics || {};
       contentBox.innerHTML = `
-        <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px; padding: 10px; font-size: 11.5px; color: #38bdf8; margin-bottom: 12px;">
-          ⚖️ <strong>Spatial Discrepancy Comparator:</strong> ${data.comparator_nature}
+        <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 6px; padding: 10px; font-size: 11.5px; color: #fbbf24; margin-bottom: 10px;">
+          ⚠️ <strong>Visual QA Alignment Status:</strong> <code>${data.alignment_status}</code><br>
+          <span style="font-size: 10.5px; color: var(--text-muted);">Metrics represent spatial agreement with unverified sample annotations, not validated ground-truth accuracy.</span>
         </div>
+
+        <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 6px; padding: 10px; font-size: 11.5px; color: #38bdf8; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <div>⚖️ <strong>Spatial Discrepancy Comparator:</strong> ${data.comparator_nature}</div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <label style="font-size: 11px;">IoU Threshold:</label>
+            <select id="disc-iou-select" style="background: var(--bg-dark); color: #fff; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 2px 6px; font-size: 11px;">
+              <option value="0.35" ${iouThreshold === 0.35 ? 'selected' : ''}>0.35 (Default)</option>
+              <option value="0.50" ${iouThreshold === 0.50 ? 'selected' : ''}>0.50 (Strict)</option>
+            </select>
+          </div>
+        </div>
+
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;">
           <div style="background: var(--bg-card); padding: 8px; border-radius: 6px; border: 1px solid var(--border-subtle); text-align: center;">
             <div style="font-size: 10px; color: var(--text-faint);">MATCHED (TP)</div>
@@ -87,15 +103,15 @@ export class ModelModalController {
           </div>
           <div style="background: var(--bg-card); padding: 8px; border-radius: 6px; border: 1px solid var(--border-subtle); text-align: center;">
             <div style="font-size: 10px; color: var(--text-faint);">PRECISION / RECALL</div>
-            <div style="font-size: 14px; font-weight: 700; color: var(--accent-cyan); margin-top: 4px;">P: ${(m.precision*100).toFixed(0)}% / R: ${(m.recall*100).toFixed(0)}%</div>
+            <div style="font-size: 14px; font-weight: 700; color: var(--accent-cyan); margin-top: 4px;">P: ${(m.precision*100).toFixed(1)}% / R: ${(m.recall*100).toFixed(1)}%</div>
           </div>
         </div>
 
-        <div style="font-size: 12px; margin-bottom: 8px;">
+        <div style="font-size: 12px; margin-bottom: 8px; display: flex; justify-content: space-between;">
           <strong>Matched Pairs (Sample):</strong>
-          <span style="font-size: 11px; color: var(--text-faint);">IoU Threshold: ${data.iou_matching_threshold}</span>
+          <span style="font-size: 11px; color: var(--text-faint);">Total AI: ${data.total_ai_predictions} | Total Ref: ${data.total_reference_features}</span>
         </div>
-        <div style="max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 6px; font-family: var(--font-mono); font-size: 11px;">
+        <div style="max-height: 160px; overflow-y: auto; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 6px; font-family: var(--font-mono); font-size: 11px;">
           ${data.matched_pairs && data.matched_pairs.length > 0 ? data.matched_pairs.map(p => `
             <div style="padding: 4px 6px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between;">
               <span style="color: var(--accent-indigo);">${p.ai_id}</span>
@@ -103,19 +119,25 @@ export class ModelModalController {
               <span style="color: var(--accent-cyan);">${p.ref_id}</span>
               <span style="color: var(--accent-emerald);">IoU: ${(p.iou * 100).toFixed(1)}%</span>
             </div>
-          `).join('') : '<div style="color: var(--text-faint); padding: 8px;">No matched pairs.</div>'}
+          `).join('') : '<div style="color: var(--text-faint); padding: 8px;">No matched pairs at current IoU threshold.</div>'}
         </div>
 
         <div style="margin-top: 10px; font-size: 10.5px; color: var(--text-faint);">
           ${data.disclaimer}
         </div>
       `;
+
+      const sel = document.getElementById('disc-iou-select');
+      if (sel) {
+        sel.onchange = (e) => this.openDiscrepancyModal(parseFloat(e.target.value));
+      }
     } catch (err) {
       contentBox.innerHTML = `<p style="color: var(--accent-rose)">Failed to load discrepancies: ${err.message}</p>`;
     }
   }
 
   async openBenchmarkModal() {
+    if (!this.benchmarkModal) return;
     this.benchmarkModal.classList.add('active');
     const contentBox = document.getElementById('benchmark-content-area');
     if (contentBox) {
@@ -160,29 +182,31 @@ export class ModelModalController {
   }
 
   async executeInference() {
+    const modeSelect = document.getElementById('model-mode-select');
     const modelSelect = document.getElementById('model-select');
     const confSlider = document.getElementById('model-conf-slider');
     const simulateFailureCheck = document.getElementById('model-simulate-failure');
     const statusBox = document.getElementById('model-inference-status');
     const btnRun = document.getElementById('btn-run-inference');
 
-    const modelName = modelSelect ? modelSelect.value : 'Vaayu-UnetPP-Lite';
+    const mode = modeSelect ? modeSelect.value : 'live';
+    const modelName = modelSelect ? modelSelect.value : 'giswqs/whu-building-unetplusplus-efficientnet-b4';
     const confThreshold = confSlider ? parseFloat(confSlider.value) : 0.5;
     const simulateFailure = simulateFailureCheck ? simulateFailureCheck.checked : false;
 
     btnRun.disabled = true;
     statusBox.innerHTML = `
       <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-cyan);">
-        <span>⚡ Executing inference forward pass (${modelName})...</span>
+        <span>⚡ Executing inference (${mode.toUpperCase()} mode: ${modelName})...</span>
       </div>
     `;
 
     try {
-      const result = await ApiClient.runModelInference(modelName, confThreshold, simulateFailure);
+      const result = await ApiClient.runModelInference(mode, modelName, confThreshold, simulateFailure);
       statusBox.innerHTML = `
         <div style="color: var(--accent-emerald); font-weight: 500;">
-          ✓ Inference Success! Extracted ${result.detected_count} building footprints.
-          <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Features appended to active review layer with source="ai_building_model".</div>
+          ✓ Inference Success (${mode.toUpperCase()} mode)! Extracted ${result.detected_count} building footprints.
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Features loaded into active review layer with source="ai_building_model".</div>
         </div>
       `;
       btnRun.disabled = false;

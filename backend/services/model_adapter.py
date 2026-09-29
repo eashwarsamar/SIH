@@ -158,6 +158,45 @@ class MockBuildingModel(BuildingModel):
         }
 
 
+class WHUBuildingModel(BuildingModel):
+    """
+    Live inference provider wrapping WHU Building Detection U-Net++ EfficientNet-B4.
+    Executes real sliding-window inference over local Lalpur orthomosaic.
+    """
+    def __init__(
+        self,
+        model_name: str = "giswqs/whu-building-unetplusplus-efficientnet-b4",
+        model_version: str = "09df9efd323bbd3d56b98b4857129eb9b5baa2d3"
+    ):
+        self.model_name = model_name
+        self.model_version = model_version
+
+    def predict(
+        self,
+        image_or_tile: Optional[Union[str, bytes]] = None,
+        bounds: Optional[Tuple[float, float, float, float]] = None,
+        confidence_threshold: float = 0.5,
+        simulate_failure: bool = False
+    ) -> Dict[str, Any]:
+        if simulate_failure:
+            raise ModelInferenceError(
+                f"Model Failure ({self.model_name}): Simulated live model failure request."
+            )
+
+        try:
+            from backend.services.whu_model import run_whu_live_inference
+            res = run_whu_live_inference(confidence_threshold=confidence_threshold)
+            return {
+                "type": "FeatureCollection",
+                "name": res.get("name", "whu_predicted_buildings"),
+                "model_metadata": res.get("model_metadata", {}),
+                "features": res.get("features", [])
+            }
+        except Exception as e:
+            raise ModelInferenceError(f"Live Model Inference Error: {e}")
+
+
+
 # ==============================================================================
 # Benchmark Dataset Adapters & Evaluation Harness
 # ==============================================================================
